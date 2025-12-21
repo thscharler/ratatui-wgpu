@@ -29,10 +29,6 @@ use wgpu::TextureUsages;
 use wgpu::TextureView;
 use wgpu::TextureViewDescriptor;
 
-use crate::colors::named::*;
-use crate::colors::Rgb;
-use crate::colors::ANSI_TO_RGB;
-
 /// A pipeline for post-processing rendered text.
 pub trait PostProcessor {
     /// Custom user data which will be supplied during creation of the post
@@ -367,30 +363,6 @@ struct TextCacheFgPipeline {
 
 struct WgpuState {
     text_dest_view: TextureView,
-}
-
-fn c2c(color: ratatui::style::Color, reset: Rgb) -> Rgb {
-    match color {
-        Color::Reset => reset,
-        Color::Black => BLACK,
-        Color::Red => RED,
-        Color::Green => GREEN,
-        Color::Yellow => YELLOW,
-        Color::Blue => BLUE,
-        Color::Magenta => MAGENTA,
-        Color::Cyan => CYAN,
-        Color::Gray => GRAY,
-        Color::DarkGray => DARKGRAY,
-        Color::LightRed => LIGHTRED,
-        Color::LightGreen => LIGHTGREEN,
-        Color::LightYellow => LIGHTYELLOW,
-        Color::LightBlue => LIGHTBLUE,
-        Color::LightMagenta => LIGHTMAGENTA,
-        Color::LightCyan => LIGHTCYAN,
-        Color::White => WHITE,
-        Color::Rgb(r, g, b) => [r, g, b],
-        Color::Indexed(idx) => ANSI_TO_RGB[idx as usize],
-    }
 }
 
 fn build_wgpu_state(device: &Device, drawable_width: u32, drawable_height: u32) -> WgpuState {

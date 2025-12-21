@@ -60,7 +60,6 @@ use wgpu::VertexState;
 use wgpu::VertexStepMode;
 
 use crate::backend::build_wgpu_state;
-use crate::backend::c2c;
 use crate::backend::private::Token;
 use crate::backend::wgpu_backend::WgpuBackend;
 use crate::backend::Dimensions;
@@ -71,9 +70,7 @@ use crate::backend::TextCacheBgPipeline;
 use crate::backend::TextCacheFgPipeline;
 use crate::backend::TextVertexMember;
 use crate::backend::Viewport;
-use crate::colors::named::BLACK;
-use crate::colors::named::WHITE;
-use crate::colors::Rgb;
+use crate::colors::{named, ColorTable};
 use crate::fonts::Font;
 use crate::fonts::Fonts;
 use crate::shaders::DefaultPostProcessor;
@@ -99,8 +96,9 @@ pub struct Builder<'a, P: PostProcessor = DefaultPostProcessor> {
     width: NonZeroU32,
     height: NonZeroU32,
     viewport: Viewport,
-    reset_fg: Rgb,
-    reset_bg: Rgb,
+    colors: ColorTable,
+    reset_fg: Color,
+    reset_bg: Color,
     fast_blink: Duration,
     slow_blink: Duration,
 }
@@ -121,8 +119,9 @@ where
             width: NonZeroU32::new(1).unwrap(),
             height: NonZeroU32::new(1).unwrap(),
             viewport: Viewport::Full,
-            reset_fg: BLACK,
-            reset_bg: WHITE,
+            colors: named::DEFAULT_COLORS,
+            reset_fg: Color::Black,
+            reset_bg: Color::White,
             fast_blink: Duration::from_millis(200),
             slow_blink: Duration::from_millis(1000),
         }
@@ -142,8 +141,9 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
             width: NonZeroU32::new(1).unwrap(),
             height: NonZeroU32::new(1).unwrap(),
             viewport: Viewport::Full,
-            reset_fg: BLACK,
-            reset_bg: WHITE,
+            colors: named::DEFAULT_COLORS,
+            reset_fg: Color::Black,
+            reset_bg: Color::White,
             fast_blink: Duration::from_millis(200),
             slow_blink: Duration::from_millis(1000),
         }
@@ -256,11 +256,18 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
         self
     }
 
+    /// Use the specified [`ColorTable`] for the base-16 colors.
+    /// There is a default value for this.
+    pub fn with_color_table(mut self, colors: ColorTable) -> Self {
+        self.colors = colors;
+        self
+    }
+
     /// Use the specified [`ratatui::style::Color`] for the default foreground
     /// color. Defaults to Black.
     #[must_use]
     pub fn with_fg_color(mut self, fg: Color) -> Self {
-        self.reset_fg = c2c(fg, self.reset_fg);
+        self.reset_fg = fg;
         self
     }
 
@@ -268,7 +275,7 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// color. Defaults to White.
     #[must_use]
     pub fn with_bg_color(mut self, bg: Color) -> Self {
-        self.reset_bg = c2c(bg, self.reset_bg);
+        self.reset_bg = bg;
         self
     }
 
@@ -479,6 +486,9 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
             (drawable_height / self.fonts.height_px()) * self.fonts.height_px(),
         );
 
+        let reset_fg = self.colors.c2c(self.reset_fg, [0,0,0]);
+        let reset_bg = self.colors.c2c(self.reset_bg, [255,255,255]);
+
         Ok(WgpuBackend {
             post_process: P::compile(
                 &device,
@@ -515,8 +525,9 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
             text_fg_compositor,
             wgpu_state,
             fonts: self.fonts,
-            reset_fg: self.reset_fg,
-            reset_bg: self.reset_bg,
+            colors: self.colors,
+            reset_fg,
+            reset_bg,
             fast_duration: self.fast_blink,
             last_fast_toggle: Instant::now(),
             show_fast: true,

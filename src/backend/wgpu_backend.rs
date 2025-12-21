@@ -57,7 +57,6 @@ use wgpu::Texture;
 use wgpu::TextureAspect;
 
 use crate::backend::build_wgpu_state;
-use crate::backend::c2c;
 use crate::backend::private::Token;
 use crate::backend::PostProcessor;
 use crate::backend::RenderSurface;
@@ -68,7 +67,7 @@ use crate::backend::TextCacheFgPipeline;
 use crate::backend::TextVertexMember;
 use crate::backend::Viewport;
 use crate::backend::WgpuState;
-use crate::colors::Rgb;
+use crate::colors::{ColorTable, Rgb};
 use crate::fonts::Font;
 use crate::fonts::Fonts;
 use crate::shaders::DefaultPostProcessor;
@@ -153,6 +152,7 @@ pub struct WgpuBackend<
     pub(super) wgpu_state: WgpuState,
 
     pub(super) fonts: Fonts<'f>,
+    pub(super) colors: ColorTable,
     pub(super) reset_fg: Rgb,
     pub(super) reset_bg: Rgb,
 
@@ -255,6 +255,13 @@ impl<'f, 's, P: PostProcessor, S: RenderSurface<'s>> WgpuBackend<'f, 's, P, S> {
                 dest
             },
         )
+    }
+
+    /// Update the color-table used for rendering. This will cause a full repaint of
+    /// the screen the next time [`WgpuBackend::flush`] is called.
+    pub fn update_color_table(&mut self, new_colors: ColorTable) {
+        self.dirty_rows.clear();
+        self.colors = new_colors;
     }
 
     /// Update the fonts used for rendering. This will cause a full repaint of
@@ -789,9 +796,9 @@ impl<'s, P: PostProcessor, S: RenderSurface<'s>> Backend for WgpuBackend<'_, 's,
 
                 let reverse = cell.modifier.contains(Modifier::REVERSED);
                 let bg_color = if reverse {
-                    c2c(cell.fg, self.reset_fg)
+                    self.colors.c2c(cell.fg, self.reset_fg)
                 } else {
-                    c2c(cell.bg, self.reset_bg)
+                    self.colors.c2c(cell.bg, self.reset_bg)
                 };
 
                 let [r, g, b] = bg_color;
@@ -810,9 +817,9 @@ impl<'s, P: PostProcessor, S: RenderSurface<'s>> Backend for WgpuBackend<'_, 's,
                     let cell = &self.cells[*cell];
                     let reverse = cell.modifier.contains(Modifier::REVERSED);
                     let fg_color = if reverse {
-                        c2c(cell.bg, self.reset_bg)
+                        self.colors.c2c(cell.bg, self.reset_bg)
                     } else {
-                        c2c(cell.fg, self.reset_fg)
+                        self.colors.c2c(cell.fg, self.reset_fg)
                     };
 
                     let alpha = if cell.modifier.contains(Modifier::HIDDEN)
