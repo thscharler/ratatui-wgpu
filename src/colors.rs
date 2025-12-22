@@ -1,31 +1,82 @@
+use ratatui::style::Color;
+
 pub(crate) type Rgb = [u8; 3];
+
+#[allow(non_snake_case)]
+#[derive(Debug, Default, Clone)]
+pub struct ColorTable {
+    pub BLACK: Rgb,
+    pub RED: Rgb,
+    pub GREEN: Rgb,
+    pub YELLOW: Rgb,
+    pub BLUE: Rgb,
+    pub MAGENTA: Rgb,
+    pub CYAN: Rgb,
+    pub GRAY: Rgb,
+    pub DARKGRAY: Rgb,
+    pub LIGHTRED: Rgb,
+    pub LIGHTGREEN: Rgb,
+    pub LIGHTYELLOW: Rgb,
+    pub LIGHTBLUE: Rgb,
+    pub LIGHTMAGENTA: Rgb,
+    pub LIGHTCYAN: Rgb,
+    pub WHITE: Rgb,
+}
+
+impl ColorTable {
+    pub(crate) fn c2c(&self, color: Color, reset: Rgb) -> Rgb {
+        match color {
+            Color::Reset => reset,
+            Color::Black => self.BLACK,
+            Color::Red => self.RED,
+            Color::Green => self.GREEN,
+            Color::Yellow => self.YELLOW,
+            Color::Blue => self.BLUE,
+            Color::Magenta => self.MAGENTA,
+            Color::Cyan => self.CYAN,
+            Color::Gray => self.GRAY,
+            Color::DarkGray => self.DARKGRAY,
+            Color::LightRed => self.LIGHTRED,
+            Color::LightGreen => self.LIGHTGREEN,
+            Color::LightYellow => self.LIGHTYELLOW,
+            Color::LightBlue => self.LIGHTBLUE,
+            Color::LightMagenta => self.LIGHTMAGENTA,
+            Color::LightCyan => self.LIGHTCYAN,
+            Color::White => self.WHITE,
+            Color::Rgb(r, g, b) => [r, g, b],
+            Color::Indexed(idx) => ANSI_TO_RGB[idx as usize],
+        }
+    }
+}
 
 /// <https://www.w3.org/TR/SVG11/types.html#ColorKeywords>
 pub(crate) mod named {
-    use crate::colors::Rgb;
+    use crate::colors::ColorTable;
 
-    pub(crate) const BLACK: Rgb = [0, 0, 0];
-    pub(crate) const GREEN: Rgb = [0, 128, 0];
-    pub(crate) const RED: Rgb = [255, 0, 0];
-    pub(crate) const BLUE: Rgb = [0, 0, 255];
-    pub(crate) const CYAN: Rgb = [0, 255, 255];
-    pub(crate) const DARKGRAY: Rgb = [169, 169, 169];
-    pub(crate) const GRAY: Rgb = [128, 128, 128];
-    pub(crate) const LIGHTBLUE: Rgb = [173, 216, 230];
-    pub(crate) const LIGHTCYAN: Rgb = [224, 255, 255];
-    pub(crate) const LIGHTGREEN: Rgb = [144, 238, 144];
-    pub(crate) const LIGHTMAGENTA: Rgb = [255, 128, 255];
-    pub(crate) const LIGHTRED: Rgb = [240, 128, 128];
-    pub(crate) const LIGHTYELLOW: Rgb = [255, 255, 224];
-    pub(crate) const MAGENTA: Rgb = [255, 0, 255];
-    pub(crate) const WHITE: Rgb = [255, 255, 255];
-    pub(crate) const YELLOW: Rgb = [255, 255, 0];
+    pub(crate) const DEFAULT_COLORS: ColorTable = ColorTable {
+        BLACK: [0, 0, 0],
+        GREEN: [0, 128, 0],
+        RED: [255, 0, 0],
+        BLUE: [0, 0, 255],
+        CYAN: [0, 255, 255],
+        DARKGRAY: [169, 169, 169],
+        GRAY: [128, 128, 128],
+        LIGHTBLUE: [173, 216, 230],
+        LIGHTCYAN: [224, 255, 255],
+        LIGHTGREEN: [144, 238, 144],
+        LIGHTMAGENTA: [255, 128, 255],
+        LIGHTRED: [240, 128, 128],
+        LIGHTYELLOW: [255, 255, 224],
+        MAGENTA: [255, 0, 255],
+        WHITE: [255, 255, 255],
+        YELLOW: [255, 255, 0],
+    };
 }
 
 /// This could be split into `[standard table]` + `[high intensity table]` +
 /// `<6x6x6 cube fn>` + `<grayscale step fn>`, but a lookup table is only 768
 /// bytes and way simpler to implement.
-pub(crate) const ANSI_TO_RGB: [Rgb; 256] = [
+const ANSI_TO_RGB: [Rgb; 256] = [
     [0x00, 0x00, 0x00],
     [0x80, 0x00, 0x00],
     [0x00, 0x80, 0x00],

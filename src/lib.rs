@@ -168,3 +168,4 @@ pub use backend::RenderTexture;
 pub use backend::Viewport;
 pub use fonts::Font;
 pub use fonts::Fonts;
+pub use colors::ColorTable;
