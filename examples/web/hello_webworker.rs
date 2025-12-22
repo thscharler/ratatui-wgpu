@@ -45,7 +45,10 @@ pub struct App {
 ///    `futures_lite::future::block_on` in the thread local context will cause
 ///    initialization to hang on Chrome.
 #[wasm_bindgen::prelude::wasm_bindgen]
-pub async fn render_entrypoint(ptr: u32, canvas: wasm_bindgen::JsValue) {
+pub async fn render_entrypoint(
+    ptr: u32,
+    canvas: wasm_bindgen::JsValue,
+) {
     thread_local! {
         static TERMINAL: Rc<OnceCell<RefCell<Terminal<WgpuBackend<'static, 'static>>>>> = Rc::new(OnceCell::new());
     }
@@ -119,7 +122,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn resumed(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
         self.window = Rc::new(RefCell::new(Some(
             event_loop
                 .create_window(WindowAttributes::default())

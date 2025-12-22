@@ -24,7 +24,7 @@ pub struct App {
 }
 
 #[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     use_srgb: u32,
     _pad: [u32; 7],
@@ -54,7 +54,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn resumed(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
         self.window = Some(Arc::new(
             event_loop
                 .create_window(WindowAttributes::default())
@@ -143,7 +146,7 @@ impl PostProcessor for Pipeline {
             address_mode_w: AddressMode::ClampToEdge,
             mag_filter: FilterMode::Nearest,
             min_filter: FilterMode::Nearest,
-            mipmap_filter: FilterMode::Nearest,
+            mipmap_filter: MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -184,7 +187,7 @@ impl PostProcessor for Pipeline {
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -212,7 +215,7 @@ impl PostProcessor for Pipeline {
                     write_mask: ColorWrites::ALL,
                 })],
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -336,14 +339,44 @@ fn build_shader(
     encoder.finish(&RenderBundleDescriptor::default())
 }
 
-const LOREM_IPSUM: &str =  "
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed nibh lacus, ultrices ac eros eget, bibendum malesuada velit. Pellentesque id leo a sem convallis consectetur. Nulla eget velit pellentesque, dapibus lectus vitae, consequat ex. Maecenas eget accumsan nibh. In at luctus nisl. Sed sapien mauris, placerat sed efficitur et, malesuada sit amet enim. Suspendisse in facilisis massa, sit amet blandit magna.
+const LOREM_IPSUM: &str =
+    "
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed nibh lacus, ultrices ac eros eget, \
+     bibendum malesuada velit. Pellentesque id leo a sem convallis consectetur. Nulla eget velit \
+     pellentesque, dapibus lectus vitae, consequat ex. Maecenas eget accumsan nibh. In at luctus \
+     nisl. Sed sapien mauris, placerat sed efficitur et, malesuada sit amet enim. Suspendisse in \
+     facilisis massa, sit amet blandit magna.
 
-Donec nec sapien sed metus ullamcorper sodales eu vel erat. Praesent tempor pharetra suscipit. Mauris at augue lorem. Aliquam sit amet rhoncus sapien. Aliquam enim quam, pharetra id nisl et, tincidunt mollis sapien. Morbi volutpat, ante in viverra eleifend, arcu ante congue felis, sit amet laoreet mauris metus a magna. Vivamus placerat erat a nunc pharetra, at dictum massa suscipit. Maecenas sit amet luctus tortor. Nullam lobortis dui ac elit dapibus, ultrices hendrerit orci auctor. Integer at egestas sapien. Aliquam malesuada risus sit amet erat ultricies, ac scelerisque magna viverra. Vivamus rhoncus suscipit nulla eget euismod. Etiam pellentesque consequat dignissim.
+Donec nec sapien sed metus ullamcorper sodales eu vel erat. Praesent tempor pharetra suscipit. \
+     Mauris at augue lorem. Aliquam sit amet rhoncus sapien. Aliquam enim quam, pharetra id nisl \
+     et, tincidunt mollis sapien. Morbi volutpat, ante in viverra eleifend, arcu ante congue \
+     felis, sit amet laoreet mauris metus a magna. Vivamus placerat erat a nunc pharetra, at \
+     dictum massa suscipit. Maecenas sit amet luctus tortor. Nullam lobortis dui ac elit dapibus, \
+     ultrices hendrerit orci auctor. Integer at egestas sapien. Aliquam malesuada risus sit amet \
+     erat ultricies, ac scelerisque magna viverra. Vivamus rhoncus suscipit nulla eget euismod. \
+     Etiam pellentesque consequat dignissim.
 
-Phasellus ut enim non tortor viverra euismod. Vivamus sagittis enim vitae nunc cursus, eget porta ligula condimentum. Suspendisse tortor dolor, blandit at erat sit amet, ultricies varius erat. Nam lobortis sapien lacus, quis semper neque placerat ut. Praesent ut eros enim. Aenean convallis nulla sit amet orci ultricies, eu blandit sem pulvinar. Aenean porta risus arcu. Aenean elementum magna at purus eleifend, in interdum dolor faucibus. Mauris sodales porta massa, posuere bibendum ante pellentesque sit amet. Donec eu turpis lectus. Suspendisse a ultrices neque. Sed non hendrerit risus. Sed ultricies nunc a lectus feugiat laoreet.
+Phasellus ut enim non tortor viverra euismod. Vivamus sagittis enim vitae nunc cursus, eget porta \
+     ligula condimentum. Suspendisse tortor dolor, blandit at erat sit amet, ultricies varius \
+     erat. Nam lobortis sapien lacus, quis semper neque placerat ut. Praesent ut eros enim. \
+     Aenean convallis nulla sit amet orci ultricies, eu blandit sem pulvinar. Aenean porta risus \
+     arcu. Aenean elementum magna at purus eleifend, in interdum dolor faucibus. Mauris sodales \
+     porta massa, posuere bibendum ante pellentesque sit amet. Donec eu turpis lectus. \
+     Suspendisse a ultrices neque. Sed non hendrerit risus. Sed ultricies nunc a lectus feugiat \
+     laoreet.
 
-Donec ultricies faucibus lectus et placerat. Curabitur tempor lectus id velit gravida, id euismod ex tempus. Nunc aliquam dictum ipsum pellentesque semper. Sed nec metus semper, porta massa consectetur, varius felis. Nullam tempus condimentum diam non posuere. Praesent elit justo, efficitur ut diam sed, tempor tempor odio. In non vestibulum metus. Suspendisse potenti. Donec non purus placerat tortor eleifend tristique. Nulla laoreet sagittis ante, quis tincidunt orci volutpat at. Donec interdum id leo sed interdum. Morbi consectetur arcu quis mi finibus, eget bibendum neque tincidunt. In fringilla orci eros, sit amet ultrices lectus accumsan vitae. Nulla id egestas massa, non laoreet nunc. Curabitur a luctus erat.
+Donec ultricies faucibus lectus et placerat. Curabitur tempor lectus id velit gravida, id euismod \
+     ex tempus. Nunc aliquam dictum ipsum pellentesque semper. Sed nec metus semper, porta massa \
+     consectetur, varius felis. Nullam tempus condimentum diam non posuere. Praesent elit justo, \
+     efficitur ut diam sed, tempor tempor odio. In non vestibulum metus. Suspendisse potenti. \
+     Donec non purus placerat tortor eleifend tristique. Nulla laoreet sagittis ante, quis \
+     tincidunt orci volutpat at. Donec interdum id leo sed interdum. Morbi consectetur arcu quis \
+     mi finibus, eget bibendum neque tincidunt. In fringilla orci eros, sit amet ultrices lectus \
+     accumsan vitae. Nulla id egestas massa, non laoreet nunc. Curabitur a luctus erat.
 
-Nunc bibendum pretium gravida. Cras porttitor mi in lacus rutrum, a placerat eros dapibus. Phasellus consequat dui nisi, pretium interdum nisl dignissim a. Sed non nisi luctus, aliquet felis hendrerit, pretium nulla. Morbi eget commodo massa. Fusce nisi nulla, varius sit amet velit vitae, lacinia dapibus lorem. Donec pulvinar dolor eu egestas viverra. Nullam a tellus bibendum, commodo mi eget, congue lectus. 
+Nunc bibendum pretium gravida. Cras porttitor mi in lacus rutrum, a placerat eros dapibus. \
+     Phasellus consequat dui nisi, pretium interdum nisl dignissim a. Sed non nisi luctus, \
+     aliquet felis hendrerit, pretium nulla. Morbi eget commodo massa. Fusce nisi nulla, varius \
+     sit amet velit vitae, lacinia dapibus lorem. Donec pulvinar dolor eu egestas viverra. Nullam \
+     a tellus bibendum, commodo mi eget, congue lectus. 
 ";

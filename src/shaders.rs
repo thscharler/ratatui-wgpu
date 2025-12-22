@@ -25,6 +25,7 @@ use wgpu::Extent3d;
 use wgpu::FilterMode;
 use wgpu::FragmentState;
 use wgpu::LoadOp;
+use wgpu::MipmapFilterMode;
 use wgpu::MultisampleState;
 use wgpu::Operations;
 use wgpu::PipelineCompilationOptions;
@@ -62,7 +63,7 @@ use wgpu::{
 use crate::backend::PostProcessor;
 
 #[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     screen_size: [f32; 2],
     preserve_aspect: u32,
@@ -109,7 +110,7 @@ impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERV
             address_mode_w: AddressMode::ClampToEdge,
             mag_filter: FilterMode::Nearest,
             min_filter: FilterMode::Nearest,
-            mipmap_filter: FilterMode::Nearest,
+            mipmap_filter: MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -150,7 +151,7 @@ impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERV
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Text Blit Layout"),
             bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -178,7 +179,7 @@ impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERV
                     write_mask: ColorWrites::ALL,
                 })],
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -306,7 +307,7 @@ fn build_blitter(
 }
 
 #[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct CrtUniforms {
     modulate_crt: [f32; 3],
     // All vec3s are padded like vec 4s
@@ -330,7 +331,7 @@ struct CrtUniforms {
 /// Settings for the CRT post-processor.
 ///
 /// See struct members for more information on each setting.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct CrtSettings {
     /// How much to increase/reduce the red channel of the CRT effect.
     /// A good range of values is 0.1 to 2.0.
@@ -449,7 +450,7 @@ impl PostProcessor for CrtPostProcessor {
             address_mode_w: AddressMode::ClampToEdge,
             mag_filter: FilterMode::Nearest,
             min_filter: FilterMode::Nearest,
-            mipmap_filter: FilterMode::Nearest,
+            mipmap_filter: MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -933,7 +934,7 @@ fn build_blur(device: &Device) -> (RenderPipeline, BindGroupLayout) {
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Blur Layout"),
         bind_group_layouts: &[&fragment_shader_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -961,7 +962,7 @@ fn build_blur(device: &Device) -> (RenderPipeline, BindGroupLayout) {
                 write_mask: ColorWrites::ALL,
             })],
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
 
@@ -1007,7 +1008,7 @@ fn build_crt(
             texture_layout,
             &uniforms_layout,
         ],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -1042,7 +1043,7 @@ fn build_crt(
                 }),
             ],
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
 

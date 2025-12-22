@@ -24,7 +24,11 @@ pub struct ColorTable {
 }
 
 impl ColorTable {
-    pub(crate) fn c2c(&self, color: Color, reset: Rgb) -> Rgb {
+    pub(crate) fn c2c(
+        &self,
+        color: Color,
+        reset: Rgb,
+    ) -> Rgb {
         match color {
             Color::Reset => reset,
             Color::Black => self.BLACK,

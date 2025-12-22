@@ -37,7 +37,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn resumed(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
         self.window = Rc::new(RefCell::new(Some(
             event_loop
                 .create_window(WindowAttributes::default())

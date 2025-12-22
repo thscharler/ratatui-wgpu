@@ -3,7 +3,6 @@ pub(crate) mod wgpu_backend;
 
 use std::num::NonZeroU32;
 
-use ratatui::style::Color;
 use wgpu::Adapter;
 use wgpu::BindGroup;
 #[cfg(test)]
@@ -98,7 +97,7 @@ impl From<(NonZeroU32, NonZeroU32)> for Dimensions {
 
 /// Controls the area the text is rendered to relative to the presentation
 /// surface.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub enum Viewport {
     /// Render to the entire surface.
@@ -135,24 +134,40 @@ mod private {
 /// A Texture target that can be rendered to.
 pub trait RenderTexture: private::Sealed + Sized {
     /// Gets a [`wgpu::TextureView`] that can be used for rendering.
-    fn get_view(&self, _token: private::Token) -> &TextureView;
+    fn get_view(
+        &self,
+        _token: private::Token,
+    ) -> &TextureView;
     /// Presents the rendered result if applicable.
-    fn present(self, _token: private::Token) {}
+    fn present(
+        self,
+        _token: private::Token,
+    ) {
+    }
 }
 
 impl RenderTexture for RenderTarget {
-    fn get_view(&self, _token: private::Token) -> &TextureView {
+    fn get_view(
+        &self,
+        _token: private::Token,
+    ) -> &TextureView {
         &self.view
     }
 
-    fn present(self, _token: private::Token) {
+    fn present(
+        self,
+        _token: private::Token,
+    ) {
         self.texture.present();
     }
 }
 
 #[cfg(test)]
 impl RenderTexture for HeadlessTarget {
-    fn get_view(&self, _token: private::Token) -> &TextureView {
+    fn get_view(
+        &self,
+        _token: private::Token,
+    ) -> &TextureView {
         &self.view
     }
 }
@@ -161,7 +176,10 @@ impl RenderTexture for HeadlessTarget {
 pub trait RenderSurface<'s>: private::Sealed {
     type Target: RenderTexture;
 
-    fn wgpu_surface(&self, _token: private::Token) -> Option<&Surface<'s>>;
+    fn wgpu_surface(
+        &self,
+        _token: private::Token,
+    ) -> Option<&Surface<'s>>;
 
     fn get_default_config(
         &self,
@@ -171,9 +189,17 @@ pub trait RenderSurface<'s>: private::Sealed {
         _token: private::Token,
     ) -> Option<SurfaceConfiguration>;
 
-    fn configure(&mut self, device: &Device, config: &SurfaceConfiguration, _token: private::Token);
+    fn configure(
+        &mut self,
+        device: &Device,
+        config: &SurfaceConfiguration,
+        _token: private::Token,
+    );
 
-    fn get_current_texture(&self, _token: private::Token) -> Option<Self::Target>;
+    fn get_current_texture(
+        &self,
+        _token: private::Token,
+    ) -> Option<Self::Target>;
 }
 
 pub struct RenderTarget {
@@ -184,7 +210,10 @@ pub struct RenderTarget {
 impl<'s> RenderSurface<'s> for Surface<'s> {
     type Target = RenderTarget;
 
-    fn wgpu_surface(&self, _token: private::Token) -> Option<&Surface<'s>> {
+    fn wgpu_surface(
+        &self,
+        _token: private::Token,
+    ) -> Option<&Surface<'s>> {
         Some(self)
     }
 
@@ -207,7 +236,10 @@ impl<'s> RenderSurface<'s> for Surface<'s> {
         Surface::configure(self, device, config);
     }
 
-    fn get_current_texture(&self, _token: private::Token) -> Option<Self::Target> {
+    fn get_current_texture(
+        &self,
+        _token: private::Token,
+    ) -> Option<Self::Target> {
         let output = match self.get_current_texture() {
             Ok(output) => output,
             Err(err) => {
@@ -270,7 +302,10 @@ impl Default for HeadlessSurface {
 impl RenderSurface<'static> for HeadlessSurface {
     type Target = HeadlessTarget;
 
-    fn wgpu_surface(&self, _token: private::Token) -> Option<&Surface<'static>> {
+    fn wgpu_surface(
+        &self,
+        _token: private::Token,
+    ) -> Option<&Surface<'static>> {
         None
     }
 
@@ -325,7 +360,10 @@ impl RenderSurface<'static> for HeadlessSurface {
         self.height = config.height;
     }
 
-    fn get_current_texture(&self, _token: private::Token) -> Option<Self::Target> {
+    fn get_current_texture(
+        &self,
+        _token: private::Token,
+    ) -> Option<Self::Target> {
         self.texture.as_ref().map(|t| HeadlessTarget {
             view: t.create_view(&TextureViewDescriptor::default()),
         })
@@ -333,7 +371,7 @@ impl RenderSurface<'static> for HeadlessSurface {
 }
 
 #[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct TextBgVertexMember {
     vertex: [f32; 2],
     bg_color: u32,
@@ -341,7 +379,7 @@ struct TextBgVertexMember {
 
 // Vertex + UVCoord + Color
 #[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct TextVertexMember {
     vertex: [f32; 2],
     uv: [f32; 2],
@@ -365,7 +403,11 @@ struct WgpuState {
     text_dest_view: TextureView,
 }
 
-fn build_wgpu_state(device: &Device, drawable_width: u32, drawable_height: u32) -> WgpuState {
+fn build_wgpu_state(
+    device: &Device,
+    drawable_width: u32,
+    drawable_height: u32,
+) -> WgpuState {
     let text_dest = device.create_texture(&TextureDescriptor {
         label: Some("Text Compositor Out"),
         size: Extent3d {

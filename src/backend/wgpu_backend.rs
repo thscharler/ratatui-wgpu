@@ -67,7 +67,8 @@ use crate::backend::TextCacheFgPipeline;
 use crate::backend::TextVertexMember;
 use crate::backend::Viewport;
 use crate::backend::WgpuState;
-use crate::colors::{ColorTable, Rgb};
+use crate::colors::ColorTable;
+use crate::colors::Rgb;
 use crate::fonts::Font;
 use crate::fonts::Fonts;
 use crate::shaders::DefaultPostProcessor;
@@ -178,7 +179,11 @@ impl<'f, 's, P: PostProcessor, S: RenderSurface<'s>> WgpuBackend<'f, 's, P, S> {
 
     /// Resize the rendering surface. This should be called e.g. to keep the
     /// backend in sync with your window size.
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub fn resize(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) {
         let limits = self.device.limits();
         let width = width.min(limits.max_texture_dimension_2d);
         let height = height.min(limits.max_texture_dimension_2d);
@@ -257,16 +262,23 @@ impl<'f, 's, P: PostProcessor, S: RenderSurface<'s>> WgpuBackend<'f, 's, P, S> {
         )
     }
 
-    /// Update the color-table used for rendering. This will cause a full repaint of
-    /// the screen the next time [`WgpuBackend::flush`] is called.
-    pub fn update_color_table(&mut self, new_colors: ColorTable) {
+    /// Update the color-table used for rendering. This will cause a full
+    /// repaint of the screen the next time [`WgpuBackend::flush`] is
+    /// called.
+    pub fn update_color_table(
+        &mut self,
+        new_colors: ColorTable,
+    ) {
         self.dirty_rows.clear();
         self.colors = new_colors;
     }
 
     /// Update the fonts used for rendering. This will cause a full repaint of
     /// the screen the next time [`WgpuBackend::flush`] is called.
-    pub fn update_fonts(&mut self, new_fonts: Fonts<'f>) {
+    pub fn update_fonts(
+        &mut self,
+        new_fonts: Fonts<'f>,
+    ) {
         self.dirty_rows.clear();
         self.cached.match_fonts(&new_fonts);
         self.fonts = new_fonts;
@@ -370,7 +382,10 @@ impl<'f, 's, P: PostProcessor, S: RenderSurface<'s>> WgpuBackend<'f, 's, P, S> {
 }
 
 impl<'s, P: PostProcessor, S: RenderSurface<'s>> Backend for WgpuBackend<'_, 's, P, S> {
-    fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
+    fn draw<'a, I>(
+        &mut self,
+        content: I,
+    ) -> std::io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
@@ -424,7 +439,10 @@ impl<'s, P: PostProcessor, S: RenderSurface<'s>> Backend for WgpuBackend<'_, 's,
         Ok(Position::new(self.cursor.0, self.cursor.1))
     }
 
-    fn set_cursor_position<Pos: Into<Position>>(&mut self, position: Pos) -> std::io::Result<()> {
+    fn set_cursor_position<Pos: Into<Position>>(
+        &mut self,
+        position: Pos,
+    ) -> std::io::Result<()> {
         let bounds = self.size()?;
         let pos: Position = position.into();
         self.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
@@ -923,7 +941,10 @@ impl<'s, P: PostProcessor, S: RenderSurface<'s>> Backend for WgpuBackend<'_, 's,
         Ok(())
     }
 
-    fn clear_region(&mut self, clear_type: ClearType) -> std::io::Result<()> {
+    fn clear_region(
+        &mut self,
+        clear_type: ClearType,
+    ) -> std::io::Result<()> {
         let bounds = self.size()?;
         let line_start = self.cursor.1 as usize * bounds.width as usize;
         let idx = line_start + self.cursor.0 as usize;
@@ -1345,7 +1366,11 @@ mod tests {
     use crate::Dimensions;
     use crate::Font;
 
-    fn tex2buffer(device: &Device, queue: &Queue, surface: &HeadlessSurface) {
+    fn tex2buffer(
+        device: &Device,
+        queue: &Queue,
+        surface: &HeadlessSurface,
+    ) {
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
         encoder.copy_texture_to_buffer(
             surface.texture.as_ref().unwrap().as_image_copy(),
@@ -1407,7 +1432,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();
@@ -1468,7 +1500,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();
@@ -1528,7 +1567,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();
@@ -1592,7 +1638,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();
@@ -1660,7 +1713,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();
@@ -1720,7 +1780,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();
@@ -1760,7 +1827,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();
@@ -1820,7 +1894,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();
@@ -1881,7 +1962,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();
@@ -1942,7 +2030,14 @@ mod tests {
             buffer.map_async(wgpu::MapMode::Read, move |data| {
                 send.send(data).unwrap();
             });
-            terminal.backend().device.poll(PollType::Wait).unwrap();
+            terminal
+                .backend()
+                .device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             recv.recv().unwrap().unwrap();
 
             let data = buffer.get_mapped_range();

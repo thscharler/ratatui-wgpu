@@ -66,7 +66,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 impl ApplicationHandler for App<'_> {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn resumed(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
         self.window = Some(Arc::new(
             event_loop
                 .create_window(WindowAttributes::default())

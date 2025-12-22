@@ -43,7 +43,10 @@ impl Font<'_> {
         &self.font
     }
 
-    pub(crate) fn char_width(&self, height_px: u32) -> u32 {
+    pub(crate) fn char_width(
+        &self,
+        height_px: u32,
+    ) -> u32 {
         let scale = height_px as f32 / self.font.height() as f32;
         (self.advance * scale) as u32
     }
@@ -74,7 +77,10 @@ impl<'a> Fonts<'a> {
     ///
     /// The provided size_px will be the rendered height in pixels of all fonts
     /// in this collection.
-    pub fn new(font: Font<'a>, size_px: u32) -> Self {
+    pub fn new(
+        font: Font<'a>,
+        size_px: u32,
+    ) -> Self {
         Self {
             char_width: font.char_width(size_px),
             char_height: size_px,
@@ -94,7 +100,10 @@ impl<'a> Fonts<'a> {
 
     /// Change the height of all fonts in this collection to the specified
     /// height in pixels.
-    pub fn set_size_px(&mut self, height_px: u32) {
+    pub fn set_size_px(
+        &mut self,
+        height_px: u32,
+    ) {
         self.char_height = height_px;
 
         self.char_width = std::iter::once(&self.last_resort)
@@ -112,7 +121,10 @@ impl<'a> Fonts<'a> {
     /// bold/italic properties. Note that this will automatically organize fonts
     /// by relative width in order to optimize fallback rendering quality. The
     /// ordering of already provided fonts will remain unchanged.
-    pub fn add_fonts(&mut self, fonts: impl IntoIterator<Item = Font<'a>>) {
+    pub fn add_fonts(
+        &mut self,
+        fonts: impl IntoIterator<Item = Font<'a>>,
+    ) {
         let bold_italic_len = self.bold_italic.len();
         let italic_len = self.italic.len();
         let bold_len = self.bold.len();
@@ -143,7 +155,10 @@ impl<'a> Fonts<'a> {
 
     /// Add a new collection of fonts for regular styled text. These fonts will
     /// come _after_ previously provided fonts in the fallback order.
-    pub fn add_regular_fonts(&mut self, fonts: impl IntoIterator<Item = Font<'a>>) {
+    pub fn add_regular_fonts(
+        &mut self,
+        fonts: impl IntoIterator<Item = Font<'a>>,
+    ) {
         self.char_width = self.char_width.min(Self::add_fonts_internal(
             &mut self.regular,
             fonts,
@@ -157,7 +172,10 @@ impl<'a> Fonts<'a> {
     /// You do not have to provide these for bold text to be supported. If no
     /// bold fonts are supplied, rendering will fallback to the regular fonts
     /// with fake bolding.
-    pub fn add_bold_fonts(&mut self, fonts: impl IntoIterator<Item = Font<'a>>) {
+    pub fn add_bold_fonts(
+        &mut self,
+        fonts: impl IntoIterator<Item = Font<'a>>,
+    ) {
         self.char_width = self.char_width.min(Self::add_fonts_internal(
             &mut self.bold,
             fonts,
@@ -172,7 +190,10 @@ impl<'a> Fonts<'a> {
     /// your application intends to make use of italics. If no italic fonts
     /// are supplied, rendering will fallback to the regular fonts with fake
     /// italics.
-    pub fn add_italic_fonts(&mut self, fonts: impl IntoIterator<Item = Font<'a>>) {
+    pub fn add_italic_fonts(
+        &mut self,
+        fonts: impl IntoIterator<Item = Font<'a>>,
+    ) {
         self.char_width = self.char_width.min(Self::add_fonts_internal(
             &mut self.italic,
             fonts,
@@ -186,7 +207,10 @@ impl<'a> Fonts<'a> {
     /// You do not have to provide these for bold text to be supported. If no
     /// bold fonts are supplied, rendering will fallback to the italic fonts
     /// with fake bolding.
-    pub fn add_bold_italic_fonts(&mut self, fonts: impl IntoIterator<Item = Font<'a>>) {
+    pub fn add_bold_italic_fonts(
+        &mut self,
+        fonts: impl IntoIterator<Item = Font<'a>>,
+    ) {
         self.char_width = self.char_width.min(Self::add_fonts_internal(
             &mut self.bold_italic,
             fonts,
@@ -205,7 +229,10 @@ impl<'a> Fonts<'a> {
         1 + self.bold.len() + self.italic.len() + self.bold_italic.len() + self.regular.len()
     }
 
-    pub(crate) fn font_for_cell(&'_ self, cell: &Cell) -> (&'_ Font<'_>, bool, bool) {
+    pub(crate) fn font_for_cell(
+        &'_ self,
+        cell: &Cell,
+    ) -> (&'_ Font<'_>, bool, bool) {
         if cell.modifier.contains(Modifier::BOLD | Modifier::ITALIC) {
             self.select_font(
                 cell.symbol(),

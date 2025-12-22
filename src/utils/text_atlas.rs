@@ -56,7 +56,11 @@ pub(crate) struct Atlas {
 }
 
 impl Atlas {
-    pub(crate) fn new(fonts: &Fonts, width: u32, height: u32) -> Self {
+    pub(crate) fn new(
+        fonts: &Fonts,
+        width: u32,
+        height: u32,
+    ) -> Self {
         let entry_width = fonts.min_width_px() * 2;
         let entry_height = fonts.height_px();
         let max_entries = ((width / entry_width) * (height / entry_height)).max(1);
@@ -75,7 +79,10 @@ impl Atlas {
         }
     }
 
-    pub(crate) fn match_fonts(&mut self, fonts: &Fonts) {
+    pub(crate) fn match_fonts(
+        &mut self,
+        fonts: &Fonts,
+    ) {
         self.clear();
         self.entry_width = fonts.min_width_px() * 2;
         self.entry_height = fonts.height_px();
@@ -92,11 +99,19 @@ impl Atlas {
         self.next_entry = 0;
     }
 
-    pub(crate) fn try_get(&mut self, key: &Key) -> Option<Entry> {
+    pub(crate) fn try_get(
+        &mut self,
+        key: &Key,
+    ) -> Option<Entry> {
         self.lru.get(key).copied().map(Entry::Cached)
     }
 
-    pub(crate) fn get(&mut self, key: &Key, width: u32, height: u32) -> Entry {
+    pub(crate) fn get(
+        &mut self,
+        key: &Key,
+        width: u32,
+        height: u32,
+    ) -> Entry {
         debug_assert_eq!(
             self.entry_height, height,
             "Internal height not equal to provided height. Did you forget to call match_fonts?"
@@ -121,7 +136,11 @@ impl Atlas {
         })
     }
 
-    fn slot_to_rect(&self, slot: u32, width: u32) -> CacheRect {
+    fn slot_to_rect(
+        &self,
+        slot: u32,
+        width: u32,
+    ) -> CacheRect {
         let x = slot % (self.width / self.entry_width) * self.entry_width;
         let y = slot / (self.width / self.entry_width) * self.entry_height;
         CacheRect {

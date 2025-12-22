@@ -26,7 +26,11 @@ impl PlanCache {
         }
     }
 
-    pub(crate) fn get(&mut self, font: &Font, buffer: &mut UnicodeBuffer) -> &ShapePlan {
+    pub(crate) fn get(
+        &mut self,
+        font: &Font,
+        buffer: &mut UnicodeBuffer,
+    ) -> &ShapePlan {
         buffer.guess_segment_properties();
         let key = Key {
             face_id: font.id(),

@@ -44,7 +44,10 @@
 //! }
 //!
 //! impl ApplicationHandler for App {
-//!     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+//!     fn resumed(
+//!         &mut self,
+//!         event_loop: &winit::event_loop::ActiveEventLoop,
+//!     ) {
 //!         self.window = Some(Arc::new(
 //!             event_loop
 //!                 .create_window(WindowAttributes::default())
@@ -166,6 +169,6 @@ pub use backend::PostProcessor;
 pub use backend::RenderSurface;
 pub use backend::RenderTexture;
 pub use backend::Viewport;
+pub use colors::ColorTable;
 pub use fonts::Font;
 pub use fonts::Fonts;
-pub use colors::ColorTable;

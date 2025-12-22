@@ -36,19 +36,41 @@ impl Outline {
 }
 
 impl rustybuzz::ttf_parser::OutlineBuilder for Outline {
-    fn move_to(&mut self, x: f32, y: f32) {
+    fn move_to(
+        &mut self,
+        x: f32,
+        y: f32,
+    ) {
         self.path.move_to(x, y);
     }
 
-    fn line_to(&mut self, x: f32, y: f32) {
+    fn line_to(
+        &mut self,
+        x: f32,
+        y: f32,
+    ) {
         self.path.line_to(x, y);
     }
 
-    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+    fn quad_to(
+        &mut self,
+        x1: f32,
+        y1: f32,
+        x: f32,
+        y: f32,
+    ) {
         self.path.quad_to(x1, y1, x, y)
     }
 
-    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+    fn curve_to(
+        &mut self,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        x: f32,
+        y: f32,
+    ) {
         self.path.cubic_to(x1, y1, x2, y2, x, y);
     }
 
@@ -108,7 +130,10 @@ impl<'f, 'd, 'p> Painter<'f, 'd, 'p> {
 }
 
 impl<'a> rustybuzz::ttf_parser::colr::Painter<'a> for Painter<'_, '_, '_> {
-    fn outline_glyph(&mut self, glyph_id: rustybuzz::ttf_parser::GlyphId) {
+    fn outline_glyph(
+        &mut self,
+        glyph_id: rustybuzz::ttf_parser::GlyphId,
+    ) {
         let mut outline = Outline::default();
         self.outline = self
             .font
@@ -124,7 +149,10 @@ impl<'a> rustybuzz::ttf_parser::colr::Painter<'a> for Painter<'_, '_, '_> {
     /// from during the `push_clip` operation, leaving it empty. This way we
     /// know if the outline is present that we are supposed to paint the
     /// path directly.
-    fn paint(&mut self, paint: rustybuzz::ttf_parser::colr::Paint<'a>) {
+    fn paint(
+        &mut self,
+        paint: rustybuzz::ttf_parser::colr::Paint<'a>,
+    ) {
         let paint = match paint {
             rustybuzz::ttf_parser::colr::Paint::Solid(color) => {
                 Source::Solid(SolidSource::from_unpremultiplied_argb(
@@ -291,7 +319,10 @@ impl<'a> rustybuzz::ttf_parser::colr::Painter<'a> for Painter<'_, '_, '_> {
         );
     }
 
-    fn push_clip_box(&mut self, clipbox: rustybuzz::ttf_parser::colr::ClipBox) {
+    fn push_clip_box(
+        &mut self,
+        clipbox: rustybuzz::ttf_parser::colr::ClipBox,
+    ) {
         let transform = self.compute_transform();
 
         let xy0 = transform.transform_point((clipbox.x_min, clipbox.y_min).into());
@@ -311,7 +342,10 @@ impl<'a> rustybuzz::ttf_parser::colr::Painter<'a> for Painter<'_, '_, '_> {
         self.target.pop_clip();
     }
 
-    fn push_layer(&mut self, mode: rustybuzz::ttf_parser::colr::CompositeMode) {
+    fn push_layer(
+        &mut self,
+        mode: rustybuzz::ttf_parser::colr::CompositeMode,
+    ) {
         self.target.push_layer_with_blend(
             1.0,
             match mode {
@@ -351,7 +385,10 @@ impl<'a> rustybuzz::ttf_parser::colr::Painter<'a> for Painter<'_, '_, '_> {
         self.target.pop_layer();
     }
 
-    fn push_transform(&mut self, transform: rustybuzz::ttf_parser::Transform) {
+    fn push_transform(
+        &mut self,
+        transform: rustybuzz::ttf_parser::Transform,
+    ) {
         self.transforms.push(transform);
     }
 

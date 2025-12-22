@@ -34,6 +34,7 @@ use wgpu::Instance;
 use wgpu::InstanceDescriptor;
 use wgpu::InstanceFlags;
 use wgpu::Limits;
+use wgpu::MipmapFilterMode;
 use wgpu::MultisampleState;
 use wgpu::PipelineCompilationOptions;
 use wgpu::PipelineLayoutDescriptor;
@@ -70,7 +71,8 @@ use crate::backend::TextCacheBgPipeline;
 use crate::backend::TextCacheFgPipeline;
 use crate::backend::TextVertexMember;
 use crate::backend::Viewport;
-use crate::colors::{named, ColorTable};
+use crate::colors::named;
+use crate::colors::ColorTable;
 use crate::fonts::Font;
 use crate::fonts::Fonts;
 use crate::shaders::DefaultPostProcessor;
@@ -131,7 +133,10 @@ where
 impl<'a, P: PostProcessor> Builder<'a, P> {
     /// Create a new Builder from a specified [`Font`] and supplied
     /// [`PostProcessor::UserData`].
-    pub fn from_font_and_user_data(font: Font<'a>, user_data: P::UserData) -> Self {
+    pub fn from_font_and_user_data(
+        font: Font<'a>,
+        user_data: P::UserData,
+    ) -> Self {
         Self {
             user_data,
             instance: None,
@@ -151,7 +156,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
 
     /// Use the supplied [`wgpu::Instance`] when building the backend.
     #[must_use]
-    pub fn with_instance(mut self, instance: Instance) -> Self {
+    pub fn with_instance(
+        mut self,
+        instance: Instance,
+    ) -> Self {
         self.instance = Some(instance);
         self
     }
@@ -159,14 +167,20 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// Use the supplied [`Viewport`] for rendering. Defaults to
     /// [`Viewport::Full`].
     #[must_use]
-    pub fn with_viewport(mut self, viewport: Viewport) -> Self {
+    pub fn with_viewport(
+        mut self,
+        viewport: Viewport,
+    ) -> Self {
         self.viewport = viewport;
         self
     }
 
     /// Use the specified font size in pixels. Defaults to 24px.
     #[must_use]
-    pub fn with_font_size_px(mut self, size: u32) -> Self {
+    pub fn with_font_size_px(
+        mut self,
+        size: u32,
+    ) -> Self {
         self.fonts.set_size_px(size);
         self
     }
@@ -178,7 +192,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// remain unchanged.
     ///
     /// See also [`Fonts::add_fonts`].
-    pub fn with_fonts<I: IntoIterator<Item = Font<'a>>>(mut self, fonts: I) -> Self {
+    pub fn with_fonts<I: IntoIterator<Item = Font<'a>>>(
+        mut self,
+        fonts: I,
+    ) -> Self {
         self.fonts.add_fonts(fonts);
         self
     }
@@ -188,7 +205,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     ///
     /// See also [`Fonts::add_regular_fonts`].
     #[must_use]
-    pub fn with_regular_fonts<I: IntoIterator<Item = Font<'a>>>(mut self, fonts: I) -> Self {
+    pub fn with_regular_fonts<I: IntoIterator<Item = Font<'a>>>(
+        mut self,
+        fonts: I,
+    ) -> Self {
         self.fonts.add_regular_fonts(fonts);
         self
     }
@@ -198,7 +218,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     ///
     /// See also [`Fonts::add_bold_fonts`].
     #[must_use]
-    pub fn with_bold_fonts<I: IntoIterator<Item = Font<'a>>>(mut self, fonts: I) -> Self {
+    pub fn with_bold_fonts<I: IntoIterator<Item = Font<'a>>>(
+        mut self,
+        fonts: I,
+    ) -> Self {
         self.fonts.add_bold_fonts(fonts);
         self
     }
@@ -208,7 +231,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     ///
     /// See also [`Fonts::add_italic_fonts`].
     #[must_use]
-    pub fn with_italic_fonts<I: IntoIterator<Item = Font<'a>>>(mut self, fonts: I) -> Self {
+    pub fn with_italic_fonts<I: IntoIterator<Item = Font<'a>>>(
+        mut self,
+        fonts: I,
+    ) -> Self {
         self.fonts.add_italic_fonts(fonts);
         self
     }
@@ -218,7 +244,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     ///
     /// See also [`Fonts::add_bold_italic_fonts`].
     #[must_use]
-    pub fn with_bold_italic_fonts<I: IntoIterator<Item = Font<'a>>>(mut self, fonts: I) -> Self {
+    pub fn with_bold_italic_fonts<I: IntoIterator<Item = Font<'a>>>(
+        mut self,
+        fonts: I,
+    ) -> Self {
         self.fonts.add_bold_italic_fonts(fonts);
         self
     }
@@ -226,14 +255,20 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// Use the specified [`wgpu::Limits`]. Defaults to
     /// [`wgpu::Adapter::limits`].
     #[must_use]
-    pub fn with_limits(mut self, limits: Limits) -> Self {
+    pub fn with_limits(
+        mut self,
+        limits: Limits,
+    ) -> Self {
         self.limits = Some(limits);
         self
     }
 
     /// Use the specified [`wgpu::PresentMode`].
     #[must_use]
-    pub fn with_present_mode(mut self, mode: PresentMode) -> Self {
+    pub fn with_present_mode(
+        mut self,
+        mode: PresentMode,
+    ) -> Self {
         self.present_mode = Some(mode);
         self
     }
@@ -241,7 +276,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// Use the specified height and width when creating the surface. Defaults
     /// to 1x1.
     #[must_use]
-    pub fn with_dimensions(mut self, dimensions: Dimensions) -> Self {
+    pub fn with_dimensions(
+        mut self,
+        dimensions: Dimensions,
+    ) -> Self {
         self.width = dimensions.width;
         self.height = dimensions.height;
         self
@@ -250,7 +288,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// Use the specified height and width when creating the surface. Defaults
     /// to 1x1.
     #[must_use]
-    pub fn with_width_and_height(mut self, dimensions: Dimensions) -> Self {
+    pub fn with_width_and_height(
+        mut self,
+        dimensions: Dimensions,
+    ) -> Self {
         self.width = dimensions.width;
         self.height = dimensions.height;
         self
@@ -258,7 +299,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
 
     /// Use the specified [`ColorTable`] for the base-16 colors.
     /// There is a default value for this.
-    pub fn with_color_table(mut self, colors: ColorTable) -> Self {
+    pub fn with_color_table(
+        mut self,
+        colors: ColorTable,
+    ) -> Self {
         self.colors = colors;
         self
     }
@@ -266,7 +310,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// Use the specified [`ratatui::style::Color`] for the default foreground
     /// color. Defaults to Black.
     #[must_use]
-    pub fn with_fg_color(mut self, fg: Color) -> Self {
+    pub fn with_fg_color(
+        mut self,
+        fg: Color,
+    ) -> Self {
         self.reset_fg = fg;
         self
     }
@@ -274,7 +321,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// Use the specified [`ratatui::style::Color`] for the default background
     /// color. Defaults to White.
     #[must_use]
-    pub fn with_bg_color(mut self, bg: Color) -> Self {
+    pub fn with_bg_color(
+        mut self,
+        bg: Color,
+    ) -> Self {
         self.reset_bg = bg;
         self
     }
@@ -284,7 +334,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// for you. If you want text to blink, you must ensure that a call to
     /// `flush` is made frequently enough. Defaults to 200ms.
     #[must_use]
-    pub fn with_rapid_blink_millis(mut self, millis: u64) -> Self {
+    pub fn with_rapid_blink_millis(
+        mut self,
+        millis: u64,
+    ) -> Self {
         self.fast_blink = Duration::from_millis(millis);
         self
     }
@@ -294,7 +347,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     /// for you. If you want text to blink, you must ensure that a call to
     /// `flush` is made frequently enough. Defaults to 1000ms.
     #[must_use]
-    pub fn with_slow_blink_millis(mut self, millis: u64) -> Self {
+    pub fn with_slow_blink_millis(
+        mut self,
+        millis: u64,
+    ) -> Self {
         self.slow_blink = Duration::from_millis(millis);
         self
     }
@@ -334,7 +390,7 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
 
     #[cfg(test)]
     pub(crate) async fn build_headless(
-        self,
+        self
     ) -> Result<WgpuBackend<'a, 'static, P, super::HeadlessSurface>> {
         self.build_with_render_surface(super::HeadlessSurface::default())
             .await
@@ -452,7 +508,7 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
             address_mode_w: AddressMode::ClampToEdge,
             mag_filter: FilterMode::Nearest,
             min_filter: FilterMode::Nearest,
-            mipmap_filter: FilterMode::Nearest,
+            mipmap_filter: MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -486,8 +542,8 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
             (drawable_height / self.fonts.height_px()) * self.fonts.height_px(),
         );
 
-        let reset_fg = self.colors.c2c(self.reset_fg, [0,0,0]);
-        let reset_bg = self.colors.c2c(self.reset_bg, [255,255,255]);
+        let reset_fg = self.colors.c2c(self.reset_fg, [0, 0, 0]);
+        let reset_bg = self.colors.c2c(self.reset_bg, [255, 255, 255]);
 
         Ok(WgpuBackend {
             post_process: P::compile(
@@ -538,7 +594,10 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     }
 }
 
-fn build_text_bg_compositor(device: &Device, screen_size: &Buffer) -> TextCacheBgPipeline {
+fn build_text_bg_compositor(
+    device: &Device,
+    screen_size: &Buffer,
+) -> TextCacheBgPipeline {
     let shader = device.create_shader_module(include_wgsl!("shaders/composite_bg.wgsl"));
 
     let vertex_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -567,7 +626,7 @@ fn build_text_bg_compositor(device: &Device, screen_size: &Buffer) -> TextCacheB
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Text Bg Compositor Layout"),
         bind_group_layouts: &[&vertex_shader_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -599,7 +658,7 @@ fn build_text_bg_compositor(device: &Device, screen_size: &Buffer) -> TextCacheB
                 write_mask: ColorWrites::ALL,
             })],
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
 
@@ -710,7 +769,7 @@ fn build_text_fg_compositor(
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Text Compositor Layout"),
         bind_group_layouts: &[&vertex_shader_layout, &fragment_shader_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -742,7 +801,7 @@ fn build_text_fg_compositor(
                 write_mask: ColorWrites::ALL,
             })],
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
 
@@ -753,7 +812,10 @@ fn build_text_fg_compositor(
     }
 }
 
-fn min_limits(adapter: &wgpu::Adapter, limits: Limits) -> Limits {
+fn min_limits(
+    adapter: &wgpu::Adapter,
+    limits: Limits,
+) -> Limits {
     let Limits {
         max_texture_dimension_1d: max_texture_dimension_1d_wl,
         max_texture_dimension_2d: max_texture_dimension_2d_wl,
@@ -787,9 +849,6 @@ fn min_limits(adapter: &wgpu::Adapter, limits: Limits) -> Limits {
         max_compute_workgroup_size_y: max_compute_workgroup_size_y_wl,
         max_compute_workgroup_size_z: max_compute_workgroup_size_z_wl,
         max_compute_workgroups_per_dimension: max_compute_workgroups_per_dimension_wl,
-        min_subgroup_size: min_subgroup_size_wl,
-        max_subgroup_size: max_subgroup_size_wl,
-        max_push_constant_size: max_push_constant_size_wl,
         max_non_sampler_bindings: max_non_sampler_bindings_wl,
         max_binding_array_elements_per_shader_stage: max_binding_array_elements_per_shader_stage_wl,
         max_binding_array_sampler_elements_per_shader_stage:
@@ -799,6 +858,19 @@ fn min_limits(adapter: &wgpu::Adapter, limits: Limits) -> Limits {
         max_tlas_instance_count: max_tlas_instance_count_wl,
         max_acceleration_structures_per_shader_stage:
             max_acceleration_structures_per_shader_stage_wl,
+        max_immediate_size: max_immediate_size_wl,
+        max_task_mesh_workgroup_total_count: max_task_mesh_workgroup_total_count_wl,
+        max_task_mesh_workgroups_per_dimension: max_task_mesh_workgroups_per_dimension_wl,
+        max_task_invocations_per_workgroup: max_task_invocations_per_workgroup_wl,
+        max_task_invocations_per_dimension: max_task_invocations_per_dimension_wl,
+        max_mesh_invocations_per_workgroup: max_mesh_invocations_per_workgroup_wl,
+        max_mesh_invocations_per_dimension: max_mesh_invocations_per_dimension_wl,
+        max_task_payload_size: max_task_payload_size_wl,
+        max_mesh_output_vertices: max_mesh_output_vertices_wl,
+        max_mesh_output_primitives: max_mesh_output_primitives_wl,
+        max_mesh_output_layers: max_mesh_output_layers_wl,
+        max_mesh_multiview_view_count: max_mesh_multiview_view_count_wl,
+        max_multiview_view_count: max_multiview_view_count_wl,
     } = limits;
     let Limits {
         max_texture_dimension_1d: max_texture_dimension_1d_al,
@@ -833,9 +905,6 @@ fn min_limits(adapter: &wgpu::Adapter, limits: Limits) -> Limits {
         max_compute_workgroup_size_y: max_compute_workgroup_size_y_al,
         max_compute_workgroup_size_z: max_compute_workgroup_size_z_al,
         max_compute_workgroups_per_dimension: max_compute_workgroups_per_dimension_al,
-        min_subgroup_size: min_subgroup_size_al,
-        max_subgroup_size: max_subgroup_size_al,
-        max_push_constant_size: max_push_constant_size_al,
         max_non_sampler_bindings: max_non_sampler_bindings_al,
         max_binding_array_elements_per_shader_stage: max_binding_array_elements_per_shader_stage_al,
         max_binding_array_sampler_elements_per_shader_stage:
@@ -845,6 +914,19 @@ fn min_limits(adapter: &wgpu::Adapter, limits: Limits) -> Limits {
         max_tlas_instance_count: max_tlas_instance_count_al,
         max_acceleration_structures_per_shader_stage:
             max_acceleration_structures_per_shader_stage_al,
+        max_immediate_size: max_immediate_size_al,
+        max_task_mesh_workgroup_total_count: max_task_mesh_workgroup_total_count_al,
+        max_task_mesh_workgroups_per_dimension: max_task_mesh_workgroups_per_dimension_al,
+        max_task_invocations_per_workgroup: max_task_invocations_per_workgroup_al,
+        max_task_invocations_per_dimension: max_task_invocations_per_dimension_al,
+        max_mesh_invocations_per_workgroup: max_mesh_invocations_per_workgroup_al,
+        max_mesh_invocations_per_dimension: max_mesh_invocations_per_dimension_al,
+        max_task_payload_size: max_task_payload_size_al,
+        max_mesh_output_vertices: max_mesh_output_vertices_al,
+        max_mesh_output_primitives: max_mesh_output_primitives_al,
+        max_mesh_output_layers: max_mesh_output_layers_al,
+        max_mesh_multiview_view_count: max_mesh_multiview_view_count_al,
+        max_multiview_view_count: max_multiview_view_count_al,
     } = adapter.limits();
 
     Limits {
@@ -1042,21 +1124,6 @@ fn min_limits(adapter: &wgpu::Adapter, limits: Limits) -> Limits {
         } else {
             max_compute_workgroups_per_dimension_al
         },
-        min_subgroup_size: if min_subgroup_size_wl <= min_subgroup_size_al {
-            min_subgroup_size_wl
-        } else {
-            min_subgroup_size_al
-        },
-        max_subgroup_size: if max_subgroup_size_wl <= max_subgroup_size_al {
-            max_subgroup_size_wl
-        } else {
-            max_subgroup_size_al
-        },
-        max_push_constant_size: if max_push_constant_size_wl <= max_push_constant_size_al {
-            max_push_constant_size_wl
-        } else {
-            max_push_constant_size_al
-        },
         max_non_sampler_bindings: if max_non_sampler_bindings_wl <= max_non_sampler_bindings_al {
             max_non_sampler_bindings_wl
         } else {
@@ -1101,5 +1168,86 @@ fn min_limits(adapter: &wgpu::Adapter, limits: Limits) -> Limits {
             } else {
                 max_acceleration_structures_per_shader_stage_al
             },
+        max_immediate_size: if max_immediate_size_wl <= max_immediate_size_al {
+            max_immediate_size_wl
+        } else {
+            max_immediate_size_al
+        },
+        max_task_mesh_workgroup_total_count: if max_task_mesh_workgroup_total_count_wl
+            <= max_task_mesh_workgroup_total_count_al
+        {
+            max_task_mesh_workgroup_total_count_wl
+        } else {
+            max_task_mesh_workgroup_total_count_al
+        },
+        max_task_mesh_workgroups_per_dimension: if max_task_mesh_workgroups_per_dimension_wl
+            <= max_task_mesh_workgroups_per_dimension_al
+        {
+            max_task_mesh_workgroups_per_dimension_wl
+        } else {
+            max_task_mesh_workgroups_per_dimension_al
+        },
+        max_task_invocations_per_workgroup: if max_task_invocations_per_workgroup_wl
+            <= max_task_invocations_per_workgroup_al
+        {
+            max_task_invocations_per_workgroup_wl
+        } else {
+            max_task_invocations_per_workgroup_al
+        },
+        max_task_invocations_per_dimension: if max_task_invocations_per_dimension_wl
+            <= max_task_invocations_per_dimension_al
+        {
+            max_task_invocations_per_dimension_wl
+        } else {
+            max_task_invocations_per_dimension_al
+        },
+        max_mesh_invocations_per_workgroup: if max_mesh_invocations_per_workgroup_wl
+            <= max_mesh_invocations_per_workgroup_al
+        {
+            max_mesh_invocations_per_workgroup_wl
+        } else {
+            max_mesh_invocations_per_workgroup_al
+        },
+        max_mesh_invocations_per_dimension: if max_mesh_invocations_per_dimension_wl
+            <= max_mesh_invocations_per_dimension_al
+        {
+            max_mesh_invocations_per_dimension_wl
+        } else {
+            max_mesh_invocations_per_dimension_al
+        },
+        max_task_payload_size: if max_task_payload_size_wl <= max_task_payload_size_al {
+            max_task_payload_size_wl
+        } else {
+            max_task_payload_size_al
+        },
+        max_mesh_output_vertices: if max_mesh_output_vertices_wl <= max_mesh_output_vertices_al {
+            max_mesh_output_vertices_wl
+        } else {
+            max_mesh_output_vertices_al
+        },
+        max_mesh_output_primitives: if max_mesh_output_primitives_wl
+            <= max_mesh_output_primitives_al
+        {
+            max_mesh_output_primitives_wl
+        } else {
+            max_mesh_output_primitives_al
+        },
+        max_mesh_output_layers: if max_mesh_output_layers_wl <= max_mesh_output_layers_al {
+            max_mesh_output_layers_wl
+        } else {
+            max_mesh_output_layers_al
+        },
+        max_mesh_multiview_view_count: if max_mesh_multiview_view_count_wl
+            <= max_mesh_multiview_view_count_al
+        {
+            max_mesh_multiview_view_count_wl
+        } else {
+            max_mesh_multiview_view_count_al
+        },
+        max_multiview_view_count: if max_multiview_view_count_wl <= max_multiview_view_count_al {
+            max_multiview_view_count_wl
+        } else {
+            max_multiview_view_count_al
+        },
     }
 }
