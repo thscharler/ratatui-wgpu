@@ -73,7 +73,7 @@ use crate::utils::text_atlas::Entry;
 use crate::utils::text_atlas::Key;
 use crate::utils::Outline;
 use crate::utils::Painter;
-use crate::RandomState;
+use crate::{PostProcessorBuilder, RandomState};
 
 const NULL_CELL: Cell = Cell::new("");
 
@@ -163,6 +163,19 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     /// backend.
     pub fn post_processor_mut(&mut self) -> &mut dyn PostProcessor {
         self.post_process.as_mut()
+    }
+
+    /// Changes the post-processor.
+    pub fn update_post_processor<P: PostProcessorBuilder>(
+        &mut self,
+        builder: P,
+    ) {
+        let post_process = builder.compile(
+            &self.device,
+            &self.wgpu_state.text_dest_view,
+            &self.surface_config,
+        );
+        self.post_process = Box::new(post_process);
     }
 
     /// Resize the rendering surface. This should be called e.g. to keep the
