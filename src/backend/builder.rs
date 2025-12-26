@@ -88,7 +88,7 @@ const CACHE_HEIGHT: u32 = 1200;
 /// Height and width will default to 1x1, so don't forget to call
 /// [`Builder::with_dimensions`] to configure the backend presentation
 /// dimensions.
-pub struct Builder<'a, P = DefaultPostProcessorBuilder> {
+pub struct Builder<'a, P> {
     postprocessor: P,
     fonts: Fonts<'a>,
     instance: Option<Instance>,
@@ -103,6 +103,8 @@ pub struct Builder<'a, P = DefaultPostProcessorBuilder> {
     fast_blink: Duration,
     slow_blink: Duration,
 }
+
+pub type DefaultBuilder<'a> = Builder<'a, DefaultPostProcessorBuilder>;
 
 impl<'a, P> Builder<'a, P>
 where
