@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::marker::PhantomData;
 use std::mem::size_of;
 use std::num::NonZeroU64;
 
@@ -51,22 +50,18 @@ use wgpu::Queue;
 use wgpu::RenderPassColorAttachment;
 use wgpu::RenderPassDescriptor;
 use wgpu::StoreOp;
-use wgpu::Surface;
 use wgpu::SurfaceConfiguration;
 use wgpu::Texture;
 use wgpu::TextureAspect;
 
-use crate::backend::build_wgpu_state;
-use crate::backend::private::Token;
 use crate::backend::PostProcessor;
-use crate::backend::RenderSurface;
-use crate::backend::RenderTexture;
 use crate::backend::TextBgVertexMember;
 use crate::backend::TextCacheBgPipeline;
 use crate::backend::TextCacheFgPipeline;
 use crate::backend::TextVertexMember;
 use crate::backend::Viewport;
 use crate::backend::WgpuState;
+use crate::backend::{build_wgpu_state, RenderSurface};
 use crate::colors::ColorTable;
 use crate::colors::Rgb;
 use crate::fonts::Font;
@@ -108,7 +103,7 @@ type Sourced = HashSet<(i32, i32, GlyphId, u32), RandomState>;
 /// - The cursor is tracked but not rendered.
 /// - No builtin accessibilty, although [`WgpuBackend::get_text`] is provided to
 ///   access the screen's contents.
-pub struct WgpuBackend<'f, 's, S: RenderSurface<'s> = Surface<'s>> {
+pub struct WgpuBackend<'f, 's> {
     pub(super) post_process: Box<dyn PostProcessor + 'static>,
 
     pub(super) cells: Vec<Cell>,
@@ -123,8 +118,7 @@ pub struct WgpuBackend<'f, 's, S: RenderSurface<'s> = Surface<'s>> {
 
     pub(super) viewport: Viewport,
 
-    pub(super) surface: S,
-    pub(super) _surface: PhantomData<&'s S>,
+    pub(super) surface: RenderSurface<'s>,
     pub(super) surface_config: SurfaceConfiguration,
     pub(super) device: Device,
     pub(super) queue: Queue,
@@ -159,7 +153,7 @@ pub struct WgpuBackend<'f, 's, S: RenderSurface<'s> = Surface<'s>> {
     pub(super) show_slow: bool,
 }
 
-impl<'f, 's, S: RenderSurface<'s>> WgpuBackend<'f, 's, S> {
+impl<'f, 's> WgpuBackend<'f, 's> {
     /// Get the [`PostProcessor`] associated with this backend.
     pub fn post_processor(&self) -> &dyn PostProcessor {
         self.post_process.as_ref()
@@ -200,8 +194,7 @@ impl<'f, 's, S: RenderSurface<'s>> WgpuBackend<'f, 's, S> {
 
         self.surface_config.width = width;
         self.surface_config.height = height;
-        self.surface
-            .configure(&self.device, &self.surface_config, Token);
+        self.surface.configure(&self.device, &self.surface_config);
 
         let width = width - inset_width;
         let height = height - inset_height;
@@ -358,7 +351,7 @@ impl<'f, 's, S: RenderSurface<'s>> WgpuBackend<'f, 's, S> {
             }
         }
 
-        let Some(texture) = self.surface.get_current_texture(Token) else {
+        let Some(texture) = self.surface.get_current_texture() else {
             return;
         };
 
@@ -367,15 +360,15 @@ impl<'f, 's, S: RenderSurface<'s>> WgpuBackend<'f, 's, S> {
             &self.queue,
             &self.wgpu_state.text_dest_view,
             &self.surface_config,
-            texture.get_view(Token),
+            texture.get_view(),
         );
 
         self.queue.submit(Some(encoder.finish()));
-        texture.present(Token);
+        texture.present();
     }
 }
 
-impl<'s, S: RenderSurface<'s>> Backend for WgpuBackend<'_, 's, S> {
+impl<'s> Backend for WgpuBackend<'_, 's> {
     fn draw<'a, I>(
         &mut self,
         content: I,
@@ -1352,7 +1345,7 @@ mod tests {
     use crate::backend::wgpu_backend::extract_bw_image;
     use crate::backend::wgpu_backend::LUT_2;
     use crate::backend::wgpu_backend::LUT_4;
-    use crate::backend::HeadlessSurface;
+    use crate::backend::RenderSurface;
     use crate::shaders::DefaultPostProcessorBuilder;
     use crate::utils::text_atlas::CacheRect;
     use crate::utils::text_atlas::Entry;
@@ -1363,8 +1356,9 @@ mod tests {
     fn tex2buffer(
         device: &Device,
         queue: &Queue,
-        surface: &HeadlessSurface,
+        surface: &RenderSurface,
     ) {
+        let surface = surface.headless().expect("headless");
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
         encoder.copy_texture_to_buffer(
             surface.texture.as_ref().unwrap().as_image_copy(),
@@ -1419,6 +1413,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 
@@ -1487,6 +1482,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 
@@ -1554,6 +1550,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 
@@ -1625,6 +1622,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 
@@ -1700,6 +1698,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 
@@ -1767,6 +1766,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 
@@ -1814,6 +1814,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 
@@ -1881,6 +1882,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 
@@ -1949,6 +1951,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 
@@ -2017,6 +2020,7 @@ mod tests {
             &terminal.backend().queue,
             surface,
         );
+        let surface = surface.headless().expect("headless");
         {
             let buffer = surface.buffer.as_ref().unwrap().slice(..);
 

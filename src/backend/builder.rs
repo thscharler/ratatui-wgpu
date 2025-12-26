@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::num::NonZeroU32;
 use std::num::NonZeroU64;
 
@@ -60,25 +59,23 @@ use wgpu::VertexBufferLayout;
 use wgpu::VertexState;
 use wgpu::VertexStepMode;
 
-use crate::backend::private::Token;
 use crate::backend::wgpu_backend::WgpuBackend;
-use crate::backend::Dimensions;
-use crate::backend::RenderSurface;
 use crate::backend::TextBgVertexMember;
 use crate::backend::TextCacheBgPipeline;
 use crate::backend::TextCacheFgPipeline;
 use crate::backend::TextVertexMember;
 use crate::backend::Viewport;
 use crate::backend::{build_wgpu_state, PostProcessorBuilder};
+use crate::backend::{Dimensions, RenderSurface};
 use crate::colors::named;
 use crate::colors::ColorTable;
 use crate::fonts::Font;
 use crate::fonts::Fonts;
+use crate::shaders::DefaultPostProcessorBuilder;
 use crate::utils::plan_cache::PlanCache;
 use crate::utils::text_atlas::Atlas;
 use crate::Error;
 use crate::Result;
-use crate::shaders::DefaultPostProcessorBuilder;
 
 const CACHE_WIDTH: u32 = 1800;
 const CACHE_HEIGHT: u32 = 1200;
@@ -392,14 +389,13 @@ where
         self,
         surface: Surface<'s>,
     ) -> Result<WgpuBackend<'a, 's>> {
-        self.build_with_render_surface(surface).await
+        self.build_with_render_surface(RenderSurface::new_surface(surface))
+            .await
     }
 
     #[cfg(test)]
-    pub(crate) async fn build_headless(
-        self
-    ) -> Result<WgpuBackend<'a, 'static, super::HeadlessSurface>> {
-        self.build_with_render_surface(super::HeadlessSurface::default())
+    pub(crate) async fn build_headless(self) -> Result<WgpuBackend<'a, 'static>> {
+        self.build_with_render_surface(RenderSurface::new_headless())
             .await
     }
 
@@ -407,15 +403,15 @@ where
     pub(crate) async fn build_headless_with_format(
         self,
         format: TextureFormat,
-    ) -> Result<WgpuBackend<'a, 'static, super::HeadlessSurface>> {
-        self.build_with_render_surface(super::HeadlessSurface::new(format))
+    ) -> Result<WgpuBackend<'a, 'static>> {
+        self.build_with_render_surface(RenderSurface::new_headless_with_format(format))
             .await
     }
 
-    async fn build_with_render_surface<'s, S: RenderSurface<'s> + 's>(
+    async fn build_with_render_surface<'s>(
         mut self,
-        mut surface: S,
-    ) -> Result<WgpuBackend<'a, 's, S>> {
+        mut surface: RenderSurface<'s>,
+    ) -> Result<WgpuBackend<'a, 's>> {
         let instance = self.instance.get_or_insert_with(|| {
             wgpu::Instance::new(&InstanceDescriptor {
                 backends: Backends::default(),
@@ -426,7 +422,7 @@ where
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                compatible_surface: surface.wgpu_surface(Token),
+                compatible_surface: surface.wgpu_surface(),
                 ..Default::default()
             })
             .await
@@ -451,7 +447,6 @@ where
                 &adapter,
                 self.width.get().min(limits.max_texture_dimension_2d),
                 self.height.get().min(limits.max_texture_dimension_2d),
-                Token,
             )
             .ok_or(Error::SurfaceConfigurationRequestFailed)?;
 
@@ -459,7 +454,7 @@ where
             surface_config.present_mode = mode;
         }
 
-        surface.configure(&device, &surface_config, Token);
+        surface.configure(&device, &surface_config);
 
         let (inset_width, inset_height) = match self.viewport {
             Viewport::Full => (0, 0),
@@ -567,7 +562,6 @@ where
             slow_blinking: BitVec::new(),
             cursor: (0, 0),
             surface,
-            _surface: PhantomData,
             surface_config,
             device,
             queue,
