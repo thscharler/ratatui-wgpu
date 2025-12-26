@@ -60,26 +60,25 @@ use wgpu::VertexBufferLayout;
 use wgpu::VertexState;
 use wgpu::VertexStepMode;
 
-use crate::backend::build_wgpu_state;
 use crate::backend::private::Token;
 use crate::backend::wgpu_backend::WgpuBackend;
 use crate::backend::Dimensions;
-use crate::backend::PostProcessor;
 use crate::backend::RenderSurface;
 use crate::backend::TextBgVertexMember;
 use crate::backend::TextCacheBgPipeline;
 use crate::backend::TextCacheFgPipeline;
 use crate::backend::TextVertexMember;
 use crate::backend::Viewport;
+use crate::backend::{build_wgpu_state, PostProcessorBuilder};
 use crate::colors::named;
 use crate::colors::ColorTable;
 use crate::fonts::Font;
 use crate::fonts::Fonts;
-use crate::shaders::DefaultPostProcessor;
 use crate::utils::plan_cache::PlanCache;
 use crate::utils::text_atlas::Atlas;
 use crate::Error;
 use crate::Result;
+use crate::shaders::DefaultPostProcessorBuilder;
 
 const CACHE_WIDTH: u32 = 1800;
 const CACHE_HEIGHT: u32 = 1200;
@@ -89,8 +88,8 @@ const CACHE_HEIGHT: u32 = 1200;
 /// Height and width will default to 1x1, so don't forget to call
 /// [`Builder::with_dimensions`] to configure the backend presentation
 /// dimensions.
-pub struct Builder<'a, P: PostProcessor = DefaultPostProcessor> {
-    user_data: P::UserData,
+pub struct Builder<'a, P = DefaultPostProcessorBuilder> {
+    postprocessor: P,
     fonts: Fonts<'a>,
     instance: Option<Instance>,
     limits: Option<Limits>,
@@ -105,15 +104,15 @@ pub struct Builder<'a, P: PostProcessor = DefaultPostProcessor> {
     slow_blink: Duration,
 }
 
-impl<'a, P: PostProcessor> Builder<'a, P>
+impl<'a, P> Builder<'a, P>
 where
-    P::UserData: Default,
+    P: PostProcessorBuilder + Default,
 {
     /// Create a new Builder from a specified [`Font`] and default
     /// [`PostProcessor::UserData`].
     pub fn from_font(font: Font<'a>) -> Self {
         Self {
-            user_data: Default::default(),
+            postprocessor: Default::default(),
             instance: None,
             fonts: Fonts::new(font, 24),
             limits: None,
@@ -130,15 +129,18 @@ where
     }
 }
 
-impl<'a, P: PostProcessor> Builder<'a, P> {
+impl<'a, P> Builder<'a, P>
+where
+    P: PostProcessorBuilder,
+{
     /// Create a new Builder from a specified [`Font`] and supplied
     /// [`PostProcessor::UserData`].
     pub fn from_font_and_user_data(
         font: Font<'a>,
-        user_data: P::UserData,
+        postprocessor_builder: P,
     ) -> Self {
         Self {
-            user_data,
+            postprocessor: postprocessor_builder,
             instance: None,
             fonts: Fonts::new(font, 24),
             limits: None,
@@ -356,13 +358,16 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     }
 }
 
-impl<'a, P: PostProcessor> Builder<'a, P> {
+impl<'a, P> Builder<'a, P>
+where
+    P: PostProcessorBuilder,
+{
     /// Build a new backend with the provided surface target - e.g. a winit
     /// `Window`.
     pub async fn build_with_target<'s>(
         mut self,
         target: impl Into<SurfaceTarget<'s>>,
-    ) -> Result<WgpuBackend<'a, 's, P>> {
+    ) -> Result<WgpuBackend<'a, 's>> {
         let instance = self.instance.get_or_insert_with(|| {
             wgpu::Instance::new(&InstanceDescriptor {
                 backends: Backends::default(),
@@ -384,14 +389,14 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     pub async fn build_with_surface<'s>(
         self,
         surface: Surface<'s>,
-    ) -> Result<WgpuBackend<'a, 's, P>> {
+    ) -> Result<WgpuBackend<'a, 's>> {
         self.build_with_render_surface(surface).await
     }
 
     #[cfg(test)]
     pub(crate) async fn build_headless(
         self
-    ) -> Result<WgpuBackend<'a, 'static, P, super::HeadlessSurface>> {
+    ) -> Result<WgpuBackend<'a, 'static, super::HeadlessSurface>> {
         self.build_with_render_surface(super::HeadlessSurface::default())
             .await
     }
@@ -400,7 +405,7 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     pub(crate) async fn build_headless_with_format(
         self,
         format: TextureFormat,
-    ) -> Result<WgpuBackend<'a, 'static, P, super::HeadlessSurface>> {
+    ) -> Result<WgpuBackend<'a, 'static, super::HeadlessSurface>> {
         self.build_with_render_surface(super::HeadlessSurface::new(format))
             .await
     }
@@ -408,7 +413,7 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
     async fn build_with_render_surface<'s, S: RenderSurface<'s> + 's>(
         mut self,
         mut surface: S,
-    ) -> Result<WgpuBackend<'a, 's, P, S>> {
+    ) -> Result<WgpuBackend<'a, 's, S>> {
         let instance = self.instance.get_or_insert_with(|| {
             wgpu::Instance::new(&InstanceDescriptor {
                 backends: Backends::default(),
@@ -545,13 +550,12 @@ impl<'a, P: PostProcessor> Builder<'a, P> {
         let reset_fg = self.colors.c2c(self.reset_fg, [0, 0, 0]);
         let reset_bg = self.colors.c2c(self.reset_bg, [255, 255, 255]);
 
+        let post_process =
+            self.postprocessor
+                .compile(&device, &wgpu_state.text_dest_view, &surface_config);
+
         Ok(WgpuBackend {
-            post_process: P::compile(
-                &device,
-                &wgpu_state.text_dest_view,
-                &surface_config,
-                self.user_data,
-            ),
+            post_process: Box::new(post_process),
             cells: vec![],
             dirty_rows: vec![],
             dirty_cells: BitVec::new(),

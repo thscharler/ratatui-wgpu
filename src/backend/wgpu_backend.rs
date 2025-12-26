@@ -71,7 +71,6 @@ use crate::colors::ColorTable;
 use crate::colors::Rgb;
 use crate::fonts::Font;
 use crate::fonts::Fonts;
-use crate::shaders::DefaultPostProcessor;
 use crate::utils::plan_cache::PlanCache;
 use crate::utils::text_atlas::Atlas;
 use crate::utils::text_atlas::CacheRect;
@@ -109,13 +108,8 @@ type Sourced = HashSet<(i32, i32, GlyphId, u32), RandomState>;
 /// - The cursor is tracked but not rendered.
 /// - No builtin accessibilty, although [`WgpuBackend::get_text`] is provided to
 ///   access the screen's contents.
-pub struct WgpuBackend<
-    'f,
-    's,
-    P: PostProcessor = DefaultPostProcessor,
-    S: RenderSurface<'s> = Surface<'s>,
-> {
-    pub(super) post_process: P,
+pub struct WgpuBackend<'f, 's, S: RenderSurface<'s> = Surface<'s>> {
+    pub(super) post_process: Box<dyn PostProcessor + 'static>,
 
     pub(super) cells: Vec<Cell>,
     pub(super) dirty_rows: Vec<bool>,
@@ -165,16 +159,16 @@ pub struct WgpuBackend<
     pub(super) show_slow: bool,
 }
 
-impl<'f, 's, P: PostProcessor, S: RenderSurface<'s>> WgpuBackend<'f, 's, P, S> {
+impl<'f, 's, S: RenderSurface<'s>> WgpuBackend<'f, 's, S> {
     /// Get the [`PostProcessor`] associated with this backend.
-    pub fn post_processor(&self) -> &P {
-        &self.post_process
+    pub fn post_processor(&self) -> &dyn PostProcessor {
+        self.post_process.as_ref()
     }
 
     /// Get a mutable reference to the [`PostProcessor`] associated with this
     /// backend.
-    pub fn post_processor_mut(&mut self) -> &mut P {
-        &mut self.post_process
+    pub fn post_processor_mut(&mut self) -> &mut dyn PostProcessor {
+        self.post_process.as_mut()
     }
 
     /// Resize the rendering surface. This should be called e.g. to keep the
@@ -381,7 +375,7 @@ impl<'f, 's, P: PostProcessor, S: RenderSurface<'s>> WgpuBackend<'f, 's, P, S> {
     }
 }
 
-impl<'s, P: PostProcessor, S: RenderSurface<'s>> Backend for WgpuBackend<'_, 's, P, S> {
+impl<'s, S: RenderSurface<'s>> Backend for WgpuBackend<'_, 's, S> {
     fn draw<'a, I>(
         &mut self,
         content: I,
@@ -1359,7 +1353,7 @@ mod tests {
     use crate::backend::wgpu_backend::LUT_2;
     use crate::backend::wgpu_backend::LUT_4;
     use crate::backend::HeadlessSurface;
-    use crate::shaders::DefaultPostProcessor;
+    use crate::shaders::DefaultPostProcessorBuilder;
     use crate::utils::text_atlas::CacheRect;
     use crate::utils::text_atlas::Entry;
     use crate::Builder;
@@ -1396,7 +1390,7 @@ mod tests {
     fn a_z() {
         let mut terminal = Terminal::new(
             futures_lite::future::block_on(
-                Builder::<DefaultPostProcessor>::from_font(
+                Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
@@ -1411,7 +1405,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1464,7 +1458,7 @@ mod tests {
     fn arabic() {
         let mut terminal = Terminal::new(
             futures_lite::future::block_on(
-                Builder::<DefaultPostProcessor>::from_font(
+                Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
@@ -1479,7 +1473,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1532,7 +1526,7 @@ mod tests {
     fn really_wide() {
         let mut terminal = Terminal::new(
             futures_lite::future::block_on(
-                Builder::<DefaultPostProcessor>::from_font(
+                Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
                 .with_width_and_height(Dimensions {
@@ -1546,7 +1540,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1599,7 +1593,7 @@ mod tests {
     fn mixed() {
         let mut terminal = Terminal::new(
             futures_lite::future::block_on(
-                Builder::<DefaultPostProcessor>::from_font(
+                Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
@@ -1614,7 +1608,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1670,7 +1664,7 @@ mod tests {
     fn mixed_colors() {
         let mut terminal = Terminal::new(
             futures_lite::future::block_on(
-                Builder::<DefaultPostProcessor>::from_font(
+                Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
@@ -1685,7 +1679,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1745,7 +1739,7 @@ mod tests {
     fn overlap() {
         let mut terminal = Terminal::new(
             futures_lite::future::block_on(
-                Builder::<DefaultPostProcessor>::from_font(
+                Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
                 .with_width_and_height(Dimensions {
@@ -1759,7 +1753,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1806,7 +1800,7 @@ mod tests {
         surface.buffer.as_ref().unwrap().unmap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1859,7 +1853,7 @@ mod tests {
     fn overlap_colors() {
         let mut terminal = Terminal::new(
             futures_lite::future::block_on(
-                Builder::<DefaultPostProcessor>::from_font(
+                Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
                 .with_width_and_height(Dimensions {
@@ -1873,7 +1867,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1925,7 +1919,7 @@ mod tests {
     fn rgb_conversion() {
         let mut terminal = Terminal::new(
             futures_lite::future::block_on(
-                Builder::<DefaultPostProcessor>::from_font(
+                Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
                 .with_width_and_height(Dimensions {
@@ -1941,7 +1935,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1993,7 +1987,7 @@ mod tests {
     fn srgb_conversion() {
         let mut terminal = Terminal::new(
             futures_lite::future::block_on(
-                Builder::<DefaultPostProcessor>::from_font(
+                Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
                 .with_width_and_height(Dimensions {
@@ -2009,7 +2003,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f| {
+            .draw(|f: &mut ratatui::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());

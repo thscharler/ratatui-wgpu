@@ -28,23 +28,23 @@ use wgpu::TextureUsages;
 use wgpu::TextureView;
 use wgpu::TextureViewDescriptor;
 
-/// A pipeline for post-processing rendered text.
-pub trait PostProcessor {
-    /// Custom user data which will be supplied during creation of the post
-    /// processor. Use this to pass in any external state your processor
-    /// requires.
-    type UserData;
+pub trait PostProcessorBuilder {
+    /// Resulting postprocessor.
+    type PostProcessor<'a>: PostProcessor + 'a;
 
     /// Called during initialization of the backend. This should fully
     /// initialize the post processor for rendering. Note that you are expected
     /// to render to the final surface during [`PostProcessor::process`].
     fn compile(
+        self,
         device: &Device,
         text_view: &TextureView,
         surface_config: &SurfaceConfiguration,
-        user_data: Self::UserData,
-    ) -> Self;
+    ) -> Self::PostProcessor<'static>;
+}
 
+/// A pipeline for post-processing rendered text.
+pub trait PostProcessor {
     /// Called after the drawing dimensions have changed (e.g. the surface was
     /// resized).
     fn resize(

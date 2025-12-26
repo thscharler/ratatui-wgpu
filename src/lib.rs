@@ -166,6 +166,7 @@ pub use backend::builder::Builder;
 pub use backend::wgpu_backend::WgpuBackend;
 pub use backend::Dimensions;
 pub use backend::PostProcessor;
+pub use backend::PostProcessorBuilder;
 pub use backend::RenderSurface;
 pub use backend::RenderTexture;
 pub use backend::Viewport;
