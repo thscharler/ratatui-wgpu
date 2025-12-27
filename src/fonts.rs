@@ -156,6 +156,15 @@ impl<'a> Fonts<'a> {
         }
     }
 
+    /// Remove the non-fallback fonts.
+    pub fn clear_fonts(&mut self) {
+        self.bold_italic.clear();
+        self.italic.clear();
+        self.bold.clear();
+        self.regular.clear();
+        self.has_fonts = false;
+    }
+
     /// Add a collection of fonts for various styles. They will automatically be
     /// added to the appropriate fallback font list based on the font's
     /// bold/italic properties. Note that this will automatically organize fonts
