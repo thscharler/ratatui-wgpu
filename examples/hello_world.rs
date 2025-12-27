@@ -3,8 +3,11 @@ use std::sync::Arc;
 
 use chrono::Local;
 use fontdb::Database;
-use ratatui::prelude::*;
-use ratatui::widgets::*;
+use ratatui_core::style::Stylize;
+use ratatui_core::terminal::Terminal;
+use ratatui_core::text::Line;
+use ratatui_widgets::block::Block;
+use ratatui_widgets::paragraph::Paragraph;
 use ratatui_wgpu::shaders::AspectPreservingPostProcessorBuilder;
 use ratatui_wgpu::Builder;
 use ratatui_wgpu::Dimensions;

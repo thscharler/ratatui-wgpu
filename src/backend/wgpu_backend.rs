@@ -12,13 +12,13 @@ use raqote::DrawTarget;
 use raqote::SolidSource;
 use raqote::StrokeStyle;
 use raqote::Transform;
-use ratatui::backend::Backend;
-use ratatui::backend::ClearType;
-use ratatui::backend::WindowSize;
-use ratatui::buffer::Cell;
-use ratatui::layout::Position;
-use ratatui::layout::Size;
-use ratatui::style::Modifier;
+use ratatui_core::backend::Backend;
+use ratatui_core::backend::ClearType;
+use ratatui_core::backend::WindowSize;
+use ratatui_core::buffer::Cell;
+use ratatui_core::layout::Position;
+use ratatui_core::layout::Size;
+use ratatui_core::style::Modifier;
 use rustybuzz::shape_with_plan;
 use rustybuzz::ttf_parser::GlyphId;
 use rustybuzz::ttf_parser::RasterGlyphImage;
@@ -1063,6 +1063,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             }
         }
     }
+
+    type Error = std::io::Error;
 }
 
 fn rasterize_glyph(
@@ -1434,12 +1436,12 @@ mod tests {
     use image::GenericImageView;
     use image::ImageBuffer;
     use image::Rgba;
-    use ratatui::style::Color;
-    use ratatui::style::Stylize;
-    use ratatui::text::Line;
-    use ratatui::widgets::Block;
-    use ratatui::widgets::Paragraph;
-    use ratatui::Terminal;
+    use ratatui_core::style::Color;
+    use ratatui_core::style::Stylize;
+    use ratatui_core::text::Line;
+    use ratatui_widgets::block::Block;
+    use ratatui_widgets::paragraph::Paragraph;
+    use ratatui_core::terminal::Terminal;
     use rustybuzz::ttf_parser::RasterGlyphImage;
     use rustybuzz::ttf_parser::RasterImageFormat;
     use serial_test::serial;
@@ -1507,7 +1509,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1576,7 +1578,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1644,7 +1646,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1713,7 +1715,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1785,7 +1787,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1860,7 +1862,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1908,7 +1910,7 @@ mod tests {
         surface.buffer.as_ref().unwrap().unmap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -1976,7 +1978,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -2045,7 +2047,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
@@ -2114,7 +2116,7 @@ mod tests {
         .unwrap();
 
         terminal
-            .draw(|f: &mut ratatui::Frame| {
+            .draw(|f: &mut ratatui_core::terminal::Frame| {
                 let block = Block::bordered();
                 let area = block.inner(f.area());
                 f.render_widget(block, f.area());
