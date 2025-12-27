@@ -1,6 +1,7 @@
 use std::mem::size_of;
 use std::num::NonZeroU64;
 
+use crate::backend::{PostProcessor, PostProcessorBuilder};
 use web_time::Instant;
 use wgpu::include_wgsl;
 use wgpu::AddressMode;
@@ -56,11 +57,6 @@ use wgpu::TextureView;
 use wgpu::TextureViewDescriptor;
 use wgpu::TextureViewDimension;
 use wgpu::VertexState;
-use wgpu::{
-    self,
-};
-
-use crate::backend::PostProcessor;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -69,6 +65,13 @@ struct Uniforms {
     preserve_aspect: u32,
     use_srgb: u32,
 }
+
+#[derive(Default)]
+pub struct DefaultPostProcessorBuilder<const PRESERVE_ASPECT: bool = false>;
+
+/// A default post-processor which preserves the aspect ratio of characters when
+/// the render area size falls in between multiples of the character size.
+pub type AspectPreservingPostProcessorBuilder = DefaultPostProcessorBuilder<true>;
 
 /// The default post-processor. Used when you don't want to perform any custom
 /// shading on the output. This just blits the composited text to the surface.
@@ -88,15 +91,17 @@ pub struct DefaultPostProcessor<const PRESERVE_ASPECT: bool = false> {
 /// the render area size falls in between multiples of the character size.
 pub type AspectPreservingDefaultPostProcessor = DefaultPostProcessor<true>;
 
-impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERVE_ASPECT> {
-    type UserData = ();
+impl<const PRESERVE_ASPECT: bool> PostProcessorBuilder
+    for DefaultPostProcessorBuilder<PRESERVE_ASPECT>
+{
+    type PostProcessor<'a> = DefaultPostProcessor<PRESERVE_ASPECT>;
 
     fn compile(
+        self,
         device: &Device,
         text_view: &TextureView,
         surface_config: &SurfaceConfiguration,
-        _user_data: Self::UserData,
-    ) -> Self {
+    ) -> DefaultPostProcessor<PRESERVE_ASPECT> {
         let uniforms = device.create_buffer(&BufferDescriptor {
             label: Some("Text Blit Uniforms"),
             size: size_of::<Uniforms>() as u64,
@@ -193,7 +198,7 @@ impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERV
             &pipeline,
         );
 
-        Self {
+        DefaultPostProcessor {
             uniforms,
             bindings: layout,
             sampler,
@@ -201,7 +206,9 @@ impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERV
             blitter,
         }
     }
+}
 
+impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERVE_ASPECT> {
     fn resize(
         &mut self,
         device: &Device,
@@ -402,6 +409,11 @@ impl Default for CrtSettings {
     }
 }
 
+#[derive(Default)]
+pub struct CrtPostProcessorBuilder {
+    settings: CrtSettings,
+}
+
 /// A post-processor which applies a CRT effect to the output.
 pub struct CrtPostProcessor {
     _sampler: Sampler,
@@ -429,15 +441,21 @@ pub struct CrtPostProcessor {
     settings: CrtSettings,
 }
 
-impl PostProcessor for CrtPostProcessor {
-    type UserData = CrtSettings;
+impl CrtPostProcessorBuilder {
+    pub fn new(settings: CrtSettings) -> Self {
+        Self { settings }
+    }
+}
+
+impl PostProcessorBuilder for CrtPostProcessorBuilder {
+    type PostProcessor<'a> = CrtPostProcessor;
 
     fn compile(
+        self,
         device: &Device,
         text_view: &TextureView,
         surface_config: &SurfaceConfiguration,
-        user_data: Self::UserData,
-    ) -> Self {
+    ) -> CrtPostProcessor {
         let drawable_width = surface_config.width;
         #[cfg(not(target_arch = "wasm32"))]
         let drawable_height = surface_config.height - 1;
@@ -717,7 +735,7 @@ impl PostProcessor for CrtPostProcessor {
             })
         };
 
-        Self {
+        CrtPostProcessor {
             _sampler: sampler,
             _crt_uniforms_buffer: crt_uniforms_buffer,
             crt_pass,
@@ -733,10 +751,12 @@ impl PostProcessor for CrtPostProcessor {
             width: drawable_width,
             height: drawable_height,
             timer: Instant::now(),
-            settings: user_data,
+            settings: self.settings,
         }
     }
+}
 
+impl PostProcessor for CrtPostProcessor {
     fn resize(
         &mut self,
         device: &Device,
@@ -746,7 +766,7 @@ impl PostProcessor for CrtPostProcessor {
         let settings = self.settings.clone();
         let timer = self.timer;
 
-        *self = Self::compile(device, text_view, surface_config, settings);
+        *self = CrtPostProcessorBuilder::new(settings).compile(device, text_view, surface_config);
 
         self.timer = timer;
     }

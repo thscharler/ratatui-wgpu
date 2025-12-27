@@ -8,7 +8,6 @@ use palette::Okhsv;
 use palette::Srgb;
 use ratatui::prelude::*;
 use ratatui::widgets::*;
-use ratatui_wgpu::shaders::CrtPostProcessor;
 use ratatui_wgpu::Builder;
 use ratatui_wgpu::Dimensions;
 use ratatui_wgpu::Font;
@@ -18,10 +17,11 @@ use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::window::Window;
 use winit::window::WindowAttributes;
+use ratatui_wgpu::shaders::CrtPostProcessorBuilder;
 
 pub struct App {
     window: Option<Arc<Window>>,
-    backend: Option<Terminal<WgpuBackend<'static, 'static, CrtPostProcessor>>>,
+    backend: Option<Terminal<WgpuBackend<'static, 'static>>>,
     timer: Instant,
     last_frame: Instant,
     durations: [Option<Duration>; 100],
@@ -62,7 +62,7 @@ impl ApplicationHandler for App {
         self.backend = Some(
             Terminal::new(
                 futures_lite::future::block_on(
-                    Builder::from_font(
+                    Builder::<CrtPostProcessorBuilder>::from_font(
                         Font::new(include_bytes!(concat!(
                             env!("CARGO_MANIFEST_DIR"),
                             "/src/backend/fonts/CascadiaMono-Regular.ttf"

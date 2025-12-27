@@ -23,7 +23,7 @@
 //! #     widgets::*,
 //! # };
 //! # use ratatui_wgpu::{
-//! #     Builder,
+//! #     DefaultBuilder,
 //! #     Font,
 //! #     WgpuBackend,
 //! #     Dimensions,
@@ -59,7 +59,7 @@
 //!         self.backend = Some(
 //!             Terminal::new(
 //!                 futures_lite::future::block_on(
-//!                     Builder::from_font(
+//!                     DefaultBuilder::from_font(
 //!                         Font::new(include_bytes!("backend/fonts/CascadiaMono-Regular.ttf"))
 //!                             .unwrap(),
 //!                     )
@@ -163,11 +163,11 @@ type RandomState = ahash::RandomState;
 type RandomState = std::hash::RandomState;
 
 pub use backend::builder::Builder;
+pub use backend::builder::DefaultBuilder;
 pub use backend::wgpu_backend::WgpuBackend;
 pub use backend::Dimensions;
 pub use backend::PostProcessor;
-pub use backend::RenderSurface;
-pub use backend::RenderTexture;
+pub use backend::PostProcessorBuilder;
 pub use backend::Viewport;
 pub use colors::ColorTable;
 pub use fonts::Font;
