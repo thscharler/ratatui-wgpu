@@ -6,11 +6,11 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use ratatui::Terminal;
-use ratatui_wgpu::Builder;
 use ratatui_wgpu::Dimensions;
 use ratatui_wgpu::Font;
 use ratatui_wgpu::PostProcessor;
 use ratatui_wgpu::WgpuBackend;
+use ratatui_wgpu::{Builder, PostProcessorBuilder};
 use wgpu::*;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -20,7 +20,7 @@ use winit::window::WindowAttributes;
 
 pub struct App {
     window: Option<Arc<Window>>,
-    backend: Option<Terminal<WgpuBackend<'static, 'static, Pipeline>>>,
+    backend: Option<Terminal<WgpuBackend<'static, 'static>>>,
 }
 
 #[repr(C)]
@@ -29,6 +29,9 @@ struct Uniforms {
     use_srgb: u32,
     _pad: [u32; 7],
 }
+
+#[derive(Default)]
+pub struct PipelineBuilder;
 
 pub struct Pipeline {
     uniforms: Buffer,
@@ -69,7 +72,7 @@ impl ApplicationHandler for App {
         self.backend = Some(
             Terminal::new(
                 futures_lite::future::block_on(
-                    Builder::from_font(
+                    Builder::<PipelineBuilder>::from_font(
                         Font::new(include_bytes!(concat!(
                             env!("CARGO_MANIFEST_DIR"),
                             "/src/backend/fonts/CascadiaMono-Regular.ttf"
@@ -124,15 +127,15 @@ impl ApplicationHandler for App {
     }
 }
 
-impl PostProcessor for Pipeline {
-    type UserData = ();
+impl PostProcessorBuilder for PipelineBuilder {
+    type PostProcessor<'a> = Pipeline;
 
     fn compile(
-        device: &wgpu::Device,
-        text_view: &wgpu::TextureView,
-        surface_config: &wgpu::SurfaceConfiguration,
-        _user_data: Self::UserData,
-    ) -> Self {
+        self,
+        device: &Device,
+        text_view: &TextureView,
+        surface_config: &SurfaceConfiguration,
+    ) -> Self::PostProcessor<'static> {
         let uniforms = device.create_buffer(&BufferDescriptor {
             label: None,
             size: size_of::<Uniforms>() as u64,
@@ -229,7 +232,7 @@ impl PostProcessor for Pipeline {
             &pipeline,
         );
 
-        Self {
+        Pipeline {
             uniforms,
             bindings: layout,
             sampler,
@@ -237,7 +240,9 @@ impl PostProcessor for Pipeline {
             shader,
         }
     }
+}
 
+impl PostProcessor for Pipeline {
     fn resize(
         &mut self,
         device: &wgpu::Device,
@@ -339,8 +344,7 @@ fn build_shader(
     encoder.finish(&RenderBundleDescriptor::default())
 }
 
-const LOREM_IPSUM: &str =
-    "
+const LOREM_IPSUM: &str = "
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed nibh lacus, ultrices ac eros eget, \
      bibendum malesuada velit. Pellentesque id leo a sem convallis consectetur. Nulla eget velit \
      pellentesque, dapibus lectus vitae, consequat ex. Maecenas eget accumsan nibh. In at luctus \

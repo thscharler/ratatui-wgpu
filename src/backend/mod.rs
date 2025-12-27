@@ -5,12 +5,6 @@ use std::num::NonZeroU32;
 
 use wgpu::Adapter;
 use wgpu::BindGroup;
-#[cfg(test)]
-use wgpu::Buffer;
-#[cfg(test)]
-use wgpu::BufferDescriptor;
-#[cfg(test)]
-use wgpu::BufferUsages;
 use wgpu::CommandEncoder;
 use wgpu::Device;
 use wgpu::Extent3d;
@@ -19,8 +13,6 @@ use wgpu::RenderPipeline;
 use wgpu::Surface;
 use wgpu::SurfaceConfiguration;
 use wgpu::SurfaceTexture;
-#[cfg(test)]
-use wgpu::Texture;
 use wgpu::TextureDescriptor;
 use wgpu::TextureDimension;
 use wgpu::TextureFormat;
@@ -28,23 +20,23 @@ use wgpu::TextureUsages;
 use wgpu::TextureView;
 use wgpu::TextureViewDescriptor;
 
-/// A pipeline for post-processing rendered text.
-pub trait PostProcessor {
-    /// Custom user data which will be supplied during creation of the post
-    /// processor. Use this to pass in any external state your processor
-    /// requires.
-    type UserData;
+pub trait PostProcessorBuilder {
+    /// Resulting postprocessor.
+    type PostProcessor<'a>: PostProcessor + 'a;
 
     /// Called during initialization of the backend. This should fully
     /// initialize the post processor for rendering. Note that you are expected
     /// to render to the final surface during [`PostProcessor::process`].
     fn compile(
+        self,
         device: &Device,
         text_view: &TextureView,
         surface_config: &SurfaceConfiguration,
-        user_data: Self::UserData,
-    ) -> Self;
+    ) -> Self::PostProcessor<'static>;
+}
 
+/// A pipeline for post-processing rendered text.
+pub trait PostProcessor {
     /// Called after the drawing dimensions have changed (e.g. the surface was
     /// resized).
     fn resize(
@@ -108,265 +100,194 @@ pub enum Viewport {
     Shrink { width: u32, height: u32 },
 }
 
-mod private {
-    use wgpu::Surface;
-
+pub(crate) enum RenderTarget {
+    Surface {
+        texture: SurfaceTexture,
+        view: TextureView,
+    },
     #[cfg(test)]
-    use crate::backend::HeadlessSurface;
-    #[cfg(test)]
-    use crate::backend::HeadlessTarget;
-    use crate::backend::RenderTarget;
-
-    pub trait Sealed {}
-
-    pub struct Token;
-
-    impl Sealed for Surface<'_> {}
-    impl Sealed for RenderTarget {}
-
-    #[cfg(test)]
-    impl Sealed for HeadlessTarget {}
-
-    #[cfg(test)]
-    impl Sealed for HeadlessSurface {}
+    Headless {
+        view: TextureView,
+    },
 }
 
-/// A Texture target that can be rendered to.
-pub trait RenderTexture: private::Sealed + Sized {
-    /// Gets a [`wgpu::TextureView`] that can be used for rendering.
-    fn get_view(
-        &self,
-        _token: private::Token,
-    ) -> &TextureView;
-    /// Presents the rendered result if applicable.
-    fn present(
-        self,
-        _token: private::Token,
-    ) {
-    }
-}
-
-impl RenderTexture for RenderTarget {
-    fn get_view(
-        &self,
-        _token: private::Token,
-    ) -> &TextureView {
-        &self.view
-    }
-
-    fn present(
-        self,
-        _token: private::Token,
-    ) {
-        self.texture.present();
-    }
+pub(crate) enum RenderSurface<'s> {
+    Surface(Surface<'s>),
+    #[cfg(test)]
+    Headless(Headless),
 }
 
 #[cfg(test)]
-impl RenderTexture for HeadlessTarget {
-    fn get_view(
-        &self,
-        _token: private::Token,
-    ) -> &TextureView {
-        &self.view
-    }
-}
-
-/// A surface that can be rendered to.
-pub trait RenderSurface<'s>: private::Sealed {
-    type Target: RenderTexture;
-
-    fn wgpu_surface(
-        &self,
-        _token: private::Token,
-    ) -> Option<&Surface<'s>>;
-
-    fn get_default_config(
-        &self,
-        adapter: &Adapter,
-        width: u32,
-        height: u32,
-        _token: private::Token,
-    ) -> Option<SurfaceConfiguration>;
-
-    fn configure(
-        &mut self,
-        device: &Device,
-        config: &SurfaceConfiguration,
-        _token: private::Token,
-    );
-
-    fn get_current_texture(
-        &self,
-        _token: private::Token,
-    ) -> Option<Self::Target>;
-}
-
-pub struct RenderTarget {
-    texture: SurfaceTexture,
-    view: TextureView,
-}
-
-impl<'s> RenderSurface<'s> for Surface<'s> {
-    type Target = RenderTarget;
-
-    fn wgpu_surface(
-        &self,
-        _token: private::Token,
-    ) -> Option<&Surface<'s>> {
-        Some(self)
-    }
-
-    fn get_default_config(
-        &self,
-        adapter: &Adapter,
-        width: u32,
-        height: u32,
-        _token: private::Token,
-    ) -> Option<SurfaceConfiguration> {
-        self.get_default_config(adapter, width, height)
-    }
-
-    fn configure(
-        &mut self,
-        device: &Device,
-        config: &SurfaceConfiguration,
-        _token: private::Token,
-    ) {
-        Surface::configure(self, device, config);
-    }
-
-    fn get_current_texture(
-        &self,
-        _token: private::Token,
-    ) -> Option<Self::Target> {
-        let output = match self.get_current_texture() {
-            Ok(output) => output,
-            Err(err) => {
-                error!("{err}");
-                return None;
-            }
-        };
-
-        let view = output
-            .texture
-            .create_view(&TextureViewDescriptor::default());
-
-        Some(RenderTarget {
-            texture: output,
-            view,
-        })
-    }
-}
-
-#[cfg(test)]
-pub(crate) struct HeadlessTarget {
-    view: TextureView,
-}
-
-#[cfg(test)]
-pub(crate) struct HeadlessSurface {
-    pub(crate) texture: Option<Texture>,
-    pub(crate) buffer: Option<Buffer>,
+pub(crate) struct Headless {
+    pub(crate) texture: Option<wgpu::Texture>,
+    pub(crate) buffer: Option<wgpu::Buffer>,
     pub(crate) buffer_width: u32,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: TextureFormat,
 }
 
-#[cfg(test)]
-impl HeadlessSurface {
-    fn new(format: TextureFormat) -> Self {
-        Self {
-            format,
-            ..Default::default()
+impl RenderTarget {
+    pub(crate) fn get_view(&self) -> &TextureView {
+        match self {
+            RenderTarget::Surface { view, .. } => view,
+            #[cfg(test)]
+            RenderTarget::Headless { view } => view,
+        }
+    }
+
+    pub(crate) fn present(self) {
+        match self {
+            RenderTarget::Surface { texture, .. } => texture.present(),
+            #[cfg(test)]
+            RenderTarget::Headless { .. } => {
+                // noop
+            }
         }
     }
 }
 
-#[cfg(test)]
-impl Default for HeadlessSurface {
-    fn default() -> Self {
-        Self {
+impl<'s> RenderSurface<'s> {
+    pub(crate) fn new_surface(surface: Surface<'s>) -> Self {
+        Self::Surface(surface)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_headless() -> Self {
+        Self::Headless(Headless {
             texture: Default::default(),
             buffer: Default::default(),
             buffer_width: Default::default(),
             width: Default::default(),
             height: Default::default(),
             format: TextureFormat::Rgba8Unorm,
-        }
-    }
-}
-
-#[cfg(test)]
-impl RenderSurface<'static> for HeadlessSurface {
-    type Target = HeadlessTarget;
-
-    fn wgpu_surface(
-        &self,
-        _token: private::Token,
-    ) -> Option<&Surface<'static>> {
-        None
-    }
-
-    fn get_default_config(
-        &self,
-        _adapter: &Adapter,
-        width: u32,
-        height: u32,
-        _token: private::Token,
-    ) -> Option<SurfaceConfiguration> {
-        Some(SurfaceConfiguration {
-            usage: TextureUsages::RENDER_ATTACHMENT,
-            format: self.format,
-            width,
-            height,
-            present_mode: wgpu::PresentMode::Immediate,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
         })
     }
 
-    fn configure(
+    #[cfg(test)]
+    pub(crate) fn new_headless_with_format(format: TextureFormat) -> Self {
+        Self::Headless(Headless {
+            texture: Default::default(),
+            buffer: Default::default(),
+            buffer_width: Default::default(),
+            width: Default::default(),
+            height: Default::default(),
+            format,
+        })
+    }
+
+    pub(crate) fn wgpu_surface(&self) -> Option<&Surface<'s>> {
+        match self {
+            RenderSurface::Surface(surface) => Some(surface),
+            #[cfg(test)]
+            RenderSurface::Headless(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn headless(&self) -> Option<&Headless> {
+        match self {
+            RenderSurface::Surface(_) => None,
+            #[cfg(test)]
+            RenderSurface::Headless(headless) => Some(headless),
+        }
+    }
+
+    pub(crate) fn get_default_config(
+        &self,
+        adapter: &Adapter,
+        width: u32,
+        height: u32,
+    ) -> Option<SurfaceConfiguration> {
+        match self {
+            RenderSurface::Surface(surface) => surface.get_default_config(adapter, width, height),
+            #[cfg(test)]
+            RenderSurface::Headless(Headless { format, .. }) => Some(SurfaceConfiguration {
+                usage: TextureUsages::RENDER_ATTACHMENT,
+                format: *format,
+                width,
+                height,
+                present_mode: wgpu::PresentMode::Immediate,
+                desired_maximum_frame_latency: 2,
+                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                view_formats: vec![],
+            }),
+        }
+    }
+
+    pub(crate) fn configure(
         &mut self,
         device: &Device,
         config: &SurfaceConfiguration,
-        _token: private::Token,
     ) {
-        self.texture = Some(device.create_texture(&TextureDescriptor {
-            label: None,
-            size: Extent3d {
-                width: config.width,
-                height: config.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: self.format,
-            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-            view_formats: &[],
-        }));
+        match self {
+            RenderSurface::Surface(surface) => {
+                Surface::configure(surface, device, config);
+            }
+            #[cfg(test)]
+            RenderSurface::Headless(Headless {
+                texture,
+                buffer,
+                buffer_width,
+                width,
+                height,
+                format,
+            }) => {
+                *texture = Some(device.create_texture(&TextureDescriptor {
+                    label: None,
+                    size: Extent3d {
+                        width: config.width,
+                        height: config.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: *format,
+                    usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                }));
 
-        self.buffer_width = config.width * 4;
-        self.buffer = Some(device.create_buffer(&BufferDescriptor {
-            label: None,
-            size: (self.buffer_width * config.height) as u64,
-            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        }));
-        self.width = config.width;
-        self.height = config.height;
+                *buffer_width = config.width * 4;
+                *buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: (*buffer_width * config.height) as u64,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }));
+                *width = config.width;
+                *height = config.height;
+            }
+        }
     }
 
-    fn get_current_texture(
-        &self,
-        _token: private::Token,
-    ) -> Option<Self::Target> {
-        self.texture.as_ref().map(|t| HeadlessTarget {
-            view: t.create_view(&TextureViewDescriptor::default()),
-        })
+    pub(crate) fn get_current_texture(&self) -> Option<RenderTarget> {
+        match self {
+            RenderSurface::Surface(surface) => {
+                let output = match surface.get_current_texture() {
+                    Ok(output) => output,
+                    Err(err) => {
+                        error!("{err}");
+                        return None;
+                    }
+                };
+
+                let view = output
+                    .texture
+                    .create_view(&TextureViewDescriptor::default());
+
+                Some(RenderTarget::Surface {
+                    texture: output,
+                    view,
+                })
+            }
+            #[cfg(test)]
+            RenderSurface::Headless(Headless { texture, .. }) => {
+                texture.as_ref().map(|t| RenderTarget::Headless {
+                    view: t.create_view(&TextureViewDescriptor::default()),
+                })
+            }
+        }
     }
 }
 

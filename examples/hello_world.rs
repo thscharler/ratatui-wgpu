@@ -5,7 +5,7 @@ use chrono::Local;
 use fontdb::Database;
 use ratatui::prelude::*;
 use ratatui::widgets::*;
-use ratatui_wgpu::shaders::AspectPreservingDefaultPostProcessor;
+use ratatui_wgpu::shaders::AspectPreservingPostProcessorBuilder;
 use ratatui_wgpu::Builder;
 use ratatui_wgpu::Dimensions;
 use ratatui_wgpu::Font;
@@ -18,7 +18,7 @@ use winit::window::WindowAttributes;
 
 pub struct App<'d> {
     window: Option<Arc<Window>>,
-    backend: Option<Terminal<WgpuBackend<'d, 'static, AspectPreservingDefaultPostProcessor>>>,
+    backend: Option<Terminal<WgpuBackend<'d, 'static>>>,
     fonts: Vec<Font<'d>>,
 }
 
@@ -81,7 +81,7 @@ impl ApplicationHandler for App<'_> {
         self.backend = Some(
             Terminal::new(
                 futures_lite::future::block_on(
-                    Builder::from_font(
+                    Builder::<AspectPreservingPostProcessorBuilder>::from_font(
                         Font::new(include_bytes!(concat!(
                             env!("CARGO_MANIFEST_DIR"),
                             "/src/backend/fonts/CascadiaMono-Regular.ttf"
