@@ -2,10 +2,9 @@ use std::num::NonZeroU32;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use ratatui::widgets::Block;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Wrap;
-use ratatui::Terminal;
+use ratatui_core::terminal::Terminal;
+use ratatui_widgets::block::Block;
+use ratatui_widgets::paragraph::{Paragraph, Wrap};
 use ratatui_wgpu::Dimensions;
 use ratatui_wgpu::Font;
 use ratatui_wgpu::PostProcessor;
