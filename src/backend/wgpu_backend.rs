@@ -289,7 +289,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
     /// Replace the fonts used for rendering. This will keep the fallback fonts.
     /// If you want to replace those too, use [update_fonts].
-    /// 
+    ///
     /// This will cause a full repaint of the screen the next
     /// time [`WgpuBackend::flush`] is called.
     pub fn update_font_vec(
@@ -308,7 +308,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     /// the screen the next time [`WgpuBackend::flush`] is called.
     pub fn update_font_size(
         &mut self,
-        new_font_size: u32
+        new_font_size: u32,
     ) {
         self.dirty_rows.clear();
         self.fonts.set_size_px(new_font_size);
@@ -685,7 +685,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             .underline_metrics()
                             .map(|m| m.thickness as f32)
                             .unwrap_or(100.0); // observed average
-                        // default underlines are a bit thin for larger font-sizes.
+                                               // default underlines are a bit thin for larger font-sizes.
                         let underline_thickness =
                             (underline_thickness * 1.3 * advance_scale).max(1.0) as u16;
 
@@ -694,7 +694,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             underline_pos_min = underline_position;
                             underline_pos_max = underline_pos_min + underline_thickness;
                         } else {
-                            underline_pos_min = (cached.height as u16).saturating_sub(underline_thickness);
+                            underline_pos_min =
+                                (cached.height as u16).saturating_sub(underline_thickness);
                             underline_pos_max = cached.height as u16;
                         }
                     }
@@ -717,7 +718,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             .strikeout_metrics()
                             .map(|m| m.thickness as f32)
                             .unwrap_or(100.0); // observed average
-                        // default strikeout lines are a bit thin for larger font-sizes.
+                                               // default strikeout lines are a bit thin for larger font-sizes.
                         let strikeout_thickness =
                             (strikeout_thickness * 1.8 * advance_scale).max(1.0) as u16;
 
@@ -757,7 +758,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             advance_scale,
                             width,
                             height,
-                            is_emoji
+                            is_emoji,
                         );
                         (rect, image, colored)
                     });
@@ -1087,7 +1088,7 @@ fn rasterize_glyph(
     advance_scale: f32,
     actual_width: u32,
     actual_height: u32,
-    emoji: bool
+    emoji: bool,
 ) -> (CacheRect, Vec<u32>, bool) {
     let scale = (cached.width as f32 / actual_width as f32)
         .min(cached.height as f32 / actual_height as f32);
@@ -1251,7 +1252,7 @@ fn rasterize_glyph(
     (
         *cached,
         vec![0u32; cached.width as usize * cached.height as usize],
-        false
+        false,
     )
 }
 
@@ -1463,10 +1464,10 @@ mod tests {
     use image::Rgba;
     use ratatui_core::style::Color;
     use ratatui_core::style::Stylize;
+    use ratatui_core::terminal::Terminal;
     use ratatui_core::text::Line;
     use ratatui_widgets::block::Block;
     use ratatui_widgets::paragraph::Paragraph;
-    use ratatui_core::terminal::Terminal;
     use rustybuzz::ttf_parser::RasterGlyphImage;
     use rustybuzz::ttf_parser::RasterImageFormat;
     use serial_test::serial;
