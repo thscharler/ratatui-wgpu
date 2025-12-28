@@ -110,7 +110,7 @@ impl<'a> Fonts<'a> {
     /// __Panic__
     ///
     /// Panics if the font-vec is empty.
-    pub fn new_with_fallbacks(
+    pub fn new_vec(
         fonts: Vec<Font<'a>>,
         size_px: u32,
     ) -> Self {
@@ -170,6 +170,9 @@ impl<'a> Fonts<'a> {
     /// bold/italic properties. Note that this will automatically organize fonts
     /// by relative width in order to optimize fallback rendering quality. The
     /// ordering of already provided fonts will remain unchanged.
+    ///
+    /// Adding more fonts will not have any effect, if the text can be rendered
+    /// with a prior font.
     pub fn add_fonts(
         &mut self,
         fonts: impl IntoIterator<Item = Font<'a>>,
@@ -349,6 +352,9 @@ impl<'a> Fonts<'a> {
                 .iter()
                 .map(|v| (v, last_resort_fake_bold, last_resort_fake_italic)),
         ) {
+            // try to map the complete cluster to a single font.
+            // the first font that can map it completely wins, otherwise
+            // the one with the max matched glyphs.
             let (count, last_idx) =
                 cluster
                     .chars()
