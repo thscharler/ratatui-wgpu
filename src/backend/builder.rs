@@ -129,11 +129,11 @@ where
 
     /// Create a new Builder from a specified [`Font`] and default
     /// [`PostProcessor::UserData`].
-    pub fn from_fallback_fonts(font: Vec<Font<'a>>) -> Self {
+    pub fn from_fonts(font: Vec<Font<'a>>) -> Self {
         Self {
             postprocessor: Default::default(),
             instance: None,
-            fonts: Fonts::new_with_fallbacks(font, 24),
+            fonts: Fonts::new_vec(font, 24),
             limits: None,
             present_mode: None,
             width: NonZeroU32::new(1).unwrap(),
