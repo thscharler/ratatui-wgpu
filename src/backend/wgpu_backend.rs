@@ -591,6 +591,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             let mut shape = |font: &Font,
                              fake_bold,
                              fake_italic,
+                             is_fallback,
                              buffer: GlyphBuffer|
              -> UnicodeBuffer {
                 let metrics = font.font();
@@ -759,6 +760,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             width,
                             height,
                             is_emoji,
+                            is_fallback,
                         );
                         (rect, image, colored)
                     });
@@ -770,7 +772,12 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             let bidi = ParagraphBidiInfo::new(&self.row, None);
             let (levels, runs) = bidi.visual_runs(0..bidi.levels.len());
 
-            let (mut current_font, mut current_fake_bold, mut current_fake_italic) = fontmap[0];
+            let (
+                mut current_font,
+                mut current_fake_bold,
+                mut current_fake_italic,
+                mut current_is_fallback,
+            ) = fontmap[0];
             let mut current_level = Level::ltr();
 
             for (level, range) in runs.into_iter().map(|run| (levels[run.start], run)) {
@@ -778,11 +785,12 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 let cells = &self.rowmap[range.clone()];
                 for (idx, ch) in chars.char_indices() {
                     let cell_idx = cells[idx] as usize;
-                    let (font, fake_bold, fake_italic) = fontmap[cell_idx];
+                    let (font, fake_bold, fake_italic, is_fallback) = fontmap[cell_idx];
 
                     if font.id() != current_font.id()
                         || current_fake_bold != fake_bold
                         || current_fake_italic != fake_italic
+                        || current_is_fallback != is_fallback
                         || current_level != level
                     {
                         let mut buffer = std::mem::take(&mut self.buffer);
@@ -791,6 +799,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             current_font,
                             current_fake_bold,
                             current_fake_italic,
+                            current_is_fallback,
                             shape_with_plan(
                                 current_font.font(),
                                 self.plan_cache.get(current_font, &mut buffer),
@@ -801,6 +810,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         current_font = font;
                         current_fake_bold = fake_bold;
                         current_fake_italic = fake_italic;
+                        current_is_fallback = is_fallback;
                         current_level = level;
                     }
 
@@ -813,6 +823,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 current_font,
                 current_fake_bold,
                 current_fake_italic,
+                current_is_fallback,
                 shape_with_plan(
                     current_font.font(),
                     self.plan_cache.get(current_font, &mut buffer),
@@ -1089,9 +1100,14 @@ fn rasterize_glyph(
     actual_width: u32,
     actual_height: u32,
     emoji: bool,
+    is_fallback: bool,
 ) -> (CacheRect, Vec<u32>, bool) {
-    let rect_scale = (cached.width as f32 / actual_width as f32)
-        .min(cached.height as f32 / actual_height as f32);
+    let rect_scale = if is_fallback {
+        (cached.width as f32 / actual_width as f32).min(cached.height as f32 / actual_height as f32)
+    } else {
+        cached.width as f32 / actual_width as f32
+    };
+
     let computed_offset_x = (cached.width as f32 - actual_width as f32 * rect_scale) / 2.0;
     let computed_offset_y = cached.height as f32 - actual_height as f32 * rect_scale;
     let scale = rect_scale * advance_scale * 2.0;
