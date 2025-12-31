@@ -129,6 +129,7 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) buffer: UnicodeBuffer,
     pub(super) row: String,
     pub(super) rowmap: Vec<u16>,
+    pub(super) cell_offset: Vec<i32>,
 
     pub(super) cached: Atlas,
     pub(super) text_cache: Texture,
@@ -570,11 +571,17 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             // that cell.
             self.row.clear();
             self.rowmap.clear();
+            self.cell_offset.clear();
+
+            let mut off = 0usize;
             let mut fontmap = Vec::with_capacity(self.rowmap.capacity());
             for (idx, cell) in row.iter().enumerate() {
                 self.row.push_str(cell.symbol());
                 self.rowmap
                     .resize(self.rowmap.len() + cell.symbol().len(), idx as u16);
+                self.cell_offset
+                    .push(off as i32 * self.fonts.min_width_px() as i32);
+                off += cell.symbol().width().max(1);
                 fontmap.push(self.fonts.font_for_cell(cell));
             }
 
@@ -587,7 +594,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             // cell. This assumes that we 1) always get a non-zero advance at the beginning
             // of a cluster and 2) the next cluster in the sequence starts with a non-zero
             // advance.
-            let mut next_advance = 0;
+            let mut last_cell_idx = 0;
+            let mut last_advance = 0;
             let mut shape = |font: &Font,
                              fake_bold,
                              fake_italic,
@@ -607,21 +615,44 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     let max_width = cell.symbol().width();
                     let sourced = &mut new_sourced[cell_idx];
 
+                    // Every cell has it's defined position on the grid.
+                    // This position is used as a starting point from which
+                    // every glyph in the cell is positioned.
+                    if last_cell_idx != cell_idx {
+                        x = self.cell_offset[cell_idx];
+                    }
+
+                    // if we have a combining '.undef' skip it completely.
+                    if last_cell_idx == cell_idx {
+                        if info.glyph_id == 0 {
+                            continue;
+                        }
+                    }
+
+                    last_cell_idx = cell_idx;
+
+                    let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
+                    let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
+
                     let basey = y as i32 * self.fonts.height_px() as i32
                         + (position.y_offset as f32 * advance_scale) as i32;
-                    let mut advance = (position.x_advance as f32 * advance_scale) as i32;
-                    if advance != 0 {
-                        x += next_advance;
-                        advance =
-                            max_width as i32 * advance.signum() * self.fonts.min_width_px() as i32;
-                        next_advance = advance;
+                    let mut basex = x + glyph_offset;
+
+                    // special case: combining glyphs with offset == 0 && advance == 0
+                    if glyph_advance == 0 && glyph_offset == 0 {
+                        basex -= last_advance;
                     }
-                    let basex = x + (position.x_offset as f32 * advance_scale) as i32;
+                    if glyph_advance > 0 {
+                        last_advance = glyph_advance;
+                    }
+
+                    // advance
+                    x += glyph_advance;
 
                     // This assumes that we only want to underline the first character in the
                     // cluster, and that the remaining characters are all combining characters
                     // which don't need an underline.
-                    let set = if advance != 0 {
+                    let set = if glyph_advance != 0 {
                         Modifier::BOLD
                             | Modifier::ITALIC
                             | Modifier::UNDERLINED
@@ -1112,7 +1143,7 @@ fn rasterize_glyph(
         computed_offset_x = (cached.width as f32 - actual_width as f32 * rect_scale) / 2.0;
         computed_offset_y = cached.height as f32 - actual_height as f32 * rect_scale;
     } else {
-        // regular fonts will probably from one font family and therefore have
+        // regular fonts will probably be from one font family and therefore have
         // more regular properties.
         rect_scale = cached.width as f32 / actual_width as f32;
         computed_offset_x = -(cached.width as f32 * (1.0 - rect_scale));
