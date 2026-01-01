@@ -91,7 +91,14 @@ pub(super) struct RenderInfo {
 /// vertices.
 type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 
-type Sourced = (Vec<GlyphId>, u32);
+#[derive(Default, Clone, PartialEq, Eq)]
+pub(super) struct Sourced {
+    glyphs: Vec<GlyphId>,
+    fg: ratatui_core::style::Color,
+    bg: ratatui_core::style::Color,
+    modifier: Modifier,
+    width: u32,
+}
 
 /// A ratatui backend leveraging wgpu for rendering.
 ///
@@ -570,12 +577,14 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             // that cell.
             self.row.clear();
             self.rowmap.clear();
+            let mut ligature_map = Vec::with_capacity(self.rowmap.capacity());
 
             let mut fontmap = Vec::with_capacity(self.rowmap.capacity());
             for (idx, cell) in row.iter().enumerate() {
                 self.row.push_str(cell.symbol());
                 self.rowmap
                     .resize(self.rowmap.len() + cell.symbol().len(), idx as u16);
+                ligature_map.push(1);
                 fontmap.push(self.fonts.font_for_cell(cell));
             }
 
@@ -587,6 +596,20 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
              -> UnicodeBuffer {
                 let metrics = font.font();
                 let advance_scale = self.fonts.height_px() as f32 / metrics.height() as f32;
+
+                // ligatures can combine multiple cells into one glyph.
+                // this needs to be a separate pass.
+                let mut last_cell_idx: Option<u16> = None;
+                for info in buffer.glyph_infos() {
+                    let cell_idx = self.rowmap[info.cluster as usize];
+                    if let Some(last_cell_idx) = last_cell_idx {
+                        let dx = last_cell_idx.abs_diff(cell_idx) as u8;
+                        if dx > 1 {
+                            ligature_map[last_cell_idx as usize] = dx;
+                        }
+                    }
+                    last_cell_idx = Some(cell_idx);
+                }
 
                 let mut x = 0;
                 let mut last_cell_idx: Option<usize> = None;
@@ -600,7 +623,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     let offset = y.min(bounds.height as usize - 1) * bounds.width as usize
                         + cell_idx.min(bounds.width as usize - 1);
                     let cell = &row[cell_idx];
-                    let max_width = cell.symbol().width();
+                    // cell gap as ordained by the font shaper
+                    let lig_width = ligature_map[cell_idx] as usize;
 
                     // Every cell has it's defined position on the grid.
                     // This position is used as a starting point from which
@@ -650,18 +674,25 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     };
 
                     let ch = self.row[info.cluster as usize..].chars().next().unwrap();
-                    let chars_wide = ch.width().unwrap_or(max_width).max(1) as u8;
+                    let mut chars_wide = glyph_advance / self.fonts.em_advance() as i32;
+                    if glyph_advance % self.fonts.em_advance() as i32 != 0 {
+                        chars_wide += 1;
+                    }
+                    chars_wide = chars_wide.max(1);
 
                     let key = Key {
                         style: cell.modifier.intersection(set),
                         glyph: info.glyph_id,
-                        width: chars_wide,
+                        width: chars_wide as u8,
                         font: font.id(),
                     };
 
                     let sourced = &mut new_sourced[cell_idx];
-                    sourced.0.push(GlyphId(info.glyph_id as _));
-                    sourced.1 = chars_wide as u32;
+                    sourced.glyphs.push(GlyphId(info.glyph_id as _));
+                    sourced.width = lig_width as u32;
+                    sourced.fg = cell.fg;
+                    sourced.bg = cell.bg;
+                    sourced.modifier = cell.modifier;
 
                     let ascender = self.fonts.ascender_px();
 
@@ -831,7 +862,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             for (x, (new, old)) in new_sourced.into_iter().zip(sourced.iter_mut()).enumerate() {
                 if new != *old {
                     let cell = y * bounds.width as usize + x;
-                    let width = old.1.max(new.1) as usize;
+                    let width = old.width.max(new.width) as usize;
                     for off in 0..width {
                         if cell >= self.dirty_cells.len() {
                             break;
