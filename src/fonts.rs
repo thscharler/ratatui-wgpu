@@ -50,6 +50,14 @@ impl Font<'_> {
         (self.font.ascender() as f32 * scale) as u32
     }
 
+    pub(crate) fn em_advance(
+        &self,
+        height_px: u32,
+    ) -> u32 {
+        let scale = height_px as f32 / self.font.height() as f32;
+        (self.advance * scale) as u32
+    }
+
     pub(crate) fn char_width(
         &self,
         height_px: u32,
@@ -68,6 +76,7 @@ pub struct Fonts<'a> {
     char_width: u32,
     char_height: u32,
     ascender: u32,
+    em_advance: u32,
 
     last_resort: Vec<Font<'a>>,
 
@@ -94,6 +103,7 @@ impl<'a> Fonts<'a> {
             char_width: font.char_width(size_px),
             char_height: size_px,
             ascender: font.ascender(size_px),
+            em_advance: font.em_advance(size_px),
             last_resort: vec![font],
             has_fonts: false,
             regular: vec![],
@@ -121,6 +131,7 @@ impl<'a> Fonts<'a> {
             char_width: size_px / 2,
             char_height: size_px,
             ascender: size_px,
+            em_advance: size_px / 2,
             last_resort: fonts,
             has_fonts: false,
             regular: vec![],
@@ -141,6 +152,11 @@ impl<'a> Fonts<'a> {
         self.ascender
     }
 
+    #[inline]
+    pub fn em_advance(&self) -> u32 {
+        self.em_advance
+    }
+
     /// Change the height of all fonts in this collection to the specified
     /// height in pixels.
     pub fn set_size_px(
@@ -150,13 +166,13 @@ impl<'a> Fonts<'a> {
         self.char_height = height_px;
 
         if self.has_fonts {
-            (self.char_width, self.ascender) = self
+            (self.char_width, self.ascender, self.em_advance) = self
                 .regular
                 .iter()
                 .chain(self.bold.iter())
                 .chain(self.italic.iter())
                 .chain(self.bold_italic.iter())
-                .map(|font| (font.char_width(height_px), font.ascender(height_px)))
+                .map(|font| (font.char_width(height_px), font.ascender(height_px), font.em_advance(height_px)))
                 .min()
                 .unwrap_or_default();
         } else {
