@@ -579,17 +579,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 fontmap.push(self.fonts.font_for_cell(cell));
             }
 
-            let mut x = 0;
-            // rustbuzz provides a non-zero x-advance for the first character in a cluster
-            // with combining characters. The remainder of the cluster doesn't account for
-            // this advance, so if we advance prior to rendering them, we end up with all of
-            // the associated characters being offset by a cell. To combat this, we only
-            // bump the x-advance after we've finished processing all of the characters in a
-            // cell. This assumes that we 1) always get a non-zero advance at the beginning
-            // of a cluster and 2) the next cluster in the sequence starts with a non-zero
-            // advance.
-            let mut last_cell_idx = 0;
-            let mut last_advance = 0;
             let mut shape = |font: &Font,
                              fake_bold,
                              fake_italic,
@@ -599,6 +588,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 let metrics = font.font();
                 let advance_scale = self.fonts.height_px() as f32 / metrics.height() as f32;
 
+                let mut x = 0;
+                let mut last_cell_idx = 0;
+                let mut last_advance = 0;
                 for (info, position) in buffer
                     .glyph_infos()
                     .iter()
