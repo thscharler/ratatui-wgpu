@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::mem::size_of;
 use std::num::NonZeroU64;
 
@@ -90,8 +89,7 @@ pub(super) struct RenderInfo {
 /// vertices.
 type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 
-/// Set of (x, y, glyph, char width).
-type Sourced = HashSet<(i32, i32, GlyphId, u32), RandomState>;
+type Sourced = (Vec<GlyphId>, u32);
 
 /// A ratatui backend leveraging wgpu for rendering.
 ///
@@ -589,7 +587,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 let advance_scale = self.fonts.height_px() as f32 / metrics.height() as f32;
 
                 let mut x = 0;
-                let mut last_cell_idx = 0;
+                let mut last_cell_idx: Option<usize> = None;
                 let mut last_advance = 0;
                 for (info, position) in buffer
                     .glyph_infos()
@@ -597,25 +595,27 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     .zip(buffer.glyph_positions().iter())
                 {
                     let cell_idx = self.rowmap[info.cluster as usize] as usize;
+                    let offset = y.min(bounds.height as usize - 1) * bounds.width as usize
+                        + cell_idx.min(bounds.width as usize - 1);
                     let cell = &row[cell_idx];
                     let max_width = cell.symbol().width();
-                    let sourced = &mut new_sourced[cell_idx];
 
                     // Every cell has it's defined position on the grid.
                     // This position is used as a starting point from which
                     // every glyph in the cell is positioned.
-                    if last_cell_idx != cell_idx {
+                    if last_cell_idx != Some(cell_idx) {
                         x = cell_idx as i32 * self.fonts.min_width_px() as i32;
+                        self.rendered[offset].clear();
                     }
 
                     // if we have a combining '.undef' skip it completely.
-                    if last_cell_idx == cell_idx {
+                    if last_cell_idx == Some(cell_idx) {
                         if info.glyph_id == 0 {
                             continue;
                         }
                     }
 
-                    last_cell_idx = cell_idx;
+                    last_cell_idx = Some(cell_idx);
 
                     let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
                     let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
@@ -657,18 +657,17 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         font: font.id(),
                     };
 
+                    let sourced = &mut new_sourced[cell_idx];
+                    sourced.0.push(GlyphId(info.glyph_id as _));
+                    sourced.1 = chars_wide as u32;
+
                     let ascender = self.fonts.ascender_px();
- 
+
                     let cached = self.cached.get(
                         &key,
                         chars_wide as u32 * self.fonts.min_width_px(),
                         self.fonts.height_px(),
                     );
-
-                    let offset = y.min(bounds.height as usize - 1) * bounds.width as usize
-                        + cell_idx.min(bounds.width as usize - 1);
-
-                    sourced.insert((basex, basey, GlyphId(info.glyph_id as _), chars_wide as u32));
 
                     let mut underline_pos_min = 0;
                     let mut underline_pos_max = 0;
@@ -736,9 +735,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             strikeout_pos_max,
                         },
                     );
-                    for x_offset in 0..chars_wide as usize {
-                        self.dirty_cells.set(offset + x_offset, true);
-                    }
 
                     if cached.cached() {
                         continue;
@@ -828,24 +824,15 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 ),
             );
 
-            for (new, old) in new_sourced.into_iter().zip(sourced.iter_mut()) {
+            for (x, (new, old)) in new_sourced.into_iter().zip(sourced.iter_mut()).enumerate() {
                 if new != *old {
-                    for (x, y, glyph, width) in old.difference(&new) {
-                        let cell = ((*y).max(0) as usize / self.fonts.height_px() as usize)
-                            .min(bounds.height as usize - 1)
-                            * bounds.width as usize
-                            + ((*x).max(0) as usize / self.fonts.min_width_px() as usize)
-                                .min(bounds.width as usize - 1);
-
-                        for offset_x in 0..*width as usize {
-                            if cell >= self.dirty_cells.len() {
-                                break;
-                            }
-
-                            self.dirty_cells.set(cell + offset_x, true);
+                    let cell = y * bounds.width as usize + x;
+                    let width = old.1.max(new.1) as usize;
+                    for off in 0..width {
+                        if cell >= self.dirty_cells.len() {
+                            break;
                         }
-
-                        self.rendered[cell].shift_remove(&(*x, *y, *glyph));
+                        self.dirty_cells.set(cell + off, true);
                     }
                     *old = new;
                 }
