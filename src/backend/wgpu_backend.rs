@@ -762,7 +762,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             fake_italic & !is_emoji,
                             fake_bold,
                             advance_scale,
-                            chars_wide,
                             ascender,
                             is_emoji,
                             is_fallback,
@@ -1102,7 +1101,6 @@ fn rasterize_glyph(
     fake_italic: bool,
     fake_bold: bool,
     advance_scale: f32,
-    chars_wide: u32,
     ascender: u32,
     emoji: bool,
     is_fallback: bool,
@@ -1112,7 +1110,7 @@ fn rasterize_glyph(
         .unwrap_or_default() as f32
         * advance_scale) as u32;
     let actual_width = if actual_width == 0 {
-        chars_wide * cached.width
+        cached.width
     } else {
         actual_width
     };
