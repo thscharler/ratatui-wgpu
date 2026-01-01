@@ -589,7 +589,6 @@ where
             buffer: UnicodeBuffer::new(),
             row: String::new(),
             rowmap: vec![],
-            cell_offset: vec![],
             viewport: self.viewport,
             cached: Atlas::new(&self.fonts, CACHE_WIDTH, CACHE_HEIGHT),
             text_cache,

@@ -129,7 +129,6 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) buffer: UnicodeBuffer,
     pub(super) row: String,
     pub(super) rowmap: Vec<u16>,
-    pub(super) cell_offset: Vec<i32>,
 
     pub(super) cached: Atlas,
     pub(super) text_cache: Texture,
@@ -571,17 +570,12 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             // that cell.
             self.row.clear();
             self.rowmap.clear();
-            self.cell_offset.clear();
 
-            let mut off = 0usize;
             let mut fontmap = Vec::with_capacity(self.rowmap.capacity());
             for (idx, cell) in row.iter().enumerate() {
                 self.row.push_str(cell.symbol());
                 self.rowmap
                     .resize(self.rowmap.len() + cell.symbol().len(), idx as u16);
-                self.cell_offset
-                    .push(off as i32 * self.fonts.min_width_px() as i32);
-                off += cell.symbol().width().max(1);
                 fontmap.push(self.fonts.font_for_cell(cell));
             }
 
@@ -619,7 +613,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     // This position is used as a starting point from which
                     // every glyph in the cell is positioned.
                     if last_cell_idx != cell_idx {
-                        x = self.cell_offset[cell_idx];
+                        x = cell_idx as i32 * self.fonts.min_width_px() as i32;
                     }
 
                     // if we have a combining '.undef' skip it completely.
