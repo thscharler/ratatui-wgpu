@@ -77,8 +77,10 @@ use crate::{PostProcessorBuilder, RandomState};
 const NULL_CELL: Cell = Cell::new("");
 
 pub(super) struct RenderInfo {
-    cell: usize,
     cached: CacheRect,
+    fg: ratatui_core::style::Color,
+    bg: ratatui_core::style::Color,
+    modifier: Modifier,
     underline_pos_min: u16,
     underline_pos_max: u16,
     strikeout_pos_min: u16,
@@ -727,8 +729,10 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     self.rendered[offset].insert(
                         (basex, basey, GlyphId(info.glyph_id as _)),
                         RenderInfo {
-                            cell: y * bounds.width as usize + cell_idx,
                             cached: *cached,
+                            fg: cell.fg,
+                            bg: cell.bg,
+                            modifier: cell.modifier,
                             underline_pos_min,
                             underline_pos_max,
                             strikeout_pos_min,
@@ -896,24 +900,14 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
             let mut index_offset = 0;
             for index in self.dirty_cells.iter_ones() {
-                let cell = &self.cells[index];
                 let to_render = &self.rendered[index];
-
-                let reverse = cell.modifier.contains(Modifier::REVERSED);
-                let bg_color = if reverse {
-                    self.colors.c2c(cell.fg, self.reset_fg)
-                } else {
-                    self.colors.c2c(cell.bg, self.reset_bg)
-                };
-
-                let [r, g, b] = bg_color;
-                let bg_color_u32: u32 = u32::from_be_bytes([r, g, b, 255]);
-
                 for (
                     (x, y, _),
                     RenderInfo {
-                        cell,
                         cached,
+                        fg,
+                        bg,
+                        modifier,
                         underline_pos_min,
                         underline_pos_max,
                         strikeout_pos_min,
@@ -921,32 +915,33 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     },
                 ) in to_render.iter()
                 {
-                    let cell = &self.cells[*cell];
-                    let reverse = cell.modifier.contains(Modifier::REVERSED);
-                    let fg_color = if reverse {
-                        self.colors.c2c(cell.bg, self.reset_bg)
-                    } else {
-                        self.colors.c2c(cell.fg, self.reset_fg)
-                    };
-
-                    let alpha = if cell.modifier.contains(Modifier::HIDDEN)
-                        | (cell.modifier.contains(Modifier::RAPID_BLINK) & !self.show_fast)
-                        | (cell.modifier.contains(Modifier::SLOW_BLINK) & !self.show_slow)
+                    let alpha = if modifier.contains(Modifier::HIDDEN)
+                        | (modifier.contains(Modifier::RAPID_BLINK) & !self.show_fast)
+                        | (modifier.contains(Modifier::SLOW_BLINK) & !self.show_slow)
                     {
                         0
-                    } else if cell.modifier.contains(Modifier::DIM) {
+                    } else if modifier.contains(Modifier::DIM) {
                         127
                     } else {
                         255
                     };
 
-                    let underline_color = fg_color;
+                    let reverse = modifier.contains(Modifier::REVERSED);
+                    let fg_color = if reverse {
+                        self.colors.c2c(*bg, self.reset_bg)
+                    } else {
+                        self.colors.c2c(*fg, self.reset_fg)
+                    };
                     let [r, g, b] = fg_color;
                     let fg_color: u32 = u32::from_be_bytes([r, g, b, alpha]);
 
-                    let [r, g, b] = underline_color;
-                    let underline_color = u32::from_be_bytes([r, g, b, alpha]);
-                    let strikeout_color = u32::from_be_bytes([r, g, b, alpha]);
+                    let bg_color = if reverse {
+                        self.colors.c2c(*fg, self.reset_fg)
+                    } else {
+                        self.colors.c2c(*bg, self.reset_bg)
+                    };
+                    let [r, g, b] = bg_color;
+                    let bg_color: u32 = u32::from_be_bytes([r, g, b, 255]);
 
                     for offset_x in (0..cached.width).step_by(self.fonts.min_width_px() as usize) {
                         self.text_indices.push([
@@ -966,22 +961,22 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                         self.bg_vertices.push(TextBgVertexMember {
                             vertex: [x, y],
-                            bg_color: bg_color_u32,
+                            bg_color,
                         });
                         self.bg_vertices.push(TextBgVertexMember {
                             vertex: [x + self.fonts.min_width_px() as f32, y],
-                            bg_color: bg_color_u32,
+                            bg_color,
                         });
                         self.bg_vertices.push(TextBgVertexMember {
                             vertex: [x, y + self.fonts.height_px() as f32],
-                            bg_color: bg_color_u32,
+                            bg_color,
                         });
                         self.bg_vertices.push(TextBgVertexMember {
                             vertex: [
                                 x + self.fonts.min_width_px() as f32,
                                 y + self.fonts.height_px() as f32,
                             ],
-                            bg_color: bg_color_u32,
+                            bg_color,
                         });
 
                         let underline_pos = ((*underline_pos_min as u32 + uvy) << 16)
@@ -994,27 +989,27 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             uv: [uvx as f32, uvy as f32],
                             fg_color,
                             underline_pos,
-                            underline_color,
+                            underline_color: fg_color,
                             strikeout_pos,
-                            strikeout_color,
+                            strikeout_color: fg_color,
                         });
                         self.text_vertices.push(TextVertexMember {
                             vertex: [x + self.fonts.min_width_px() as f32, y],
                             uv: [uvx as f32 + self.fonts.min_width_px() as f32, uvy as f32],
                             fg_color,
                             underline_pos,
-                            underline_color,
+                            underline_color: fg_color,
                             strikeout_pos,
-                            strikeout_color,
+                            strikeout_color: fg_color,
                         });
                         self.text_vertices.push(TextVertexMember {
                             vertex: [x, y + self.fonts.height_px() as f32],
                             uv: [uvx as f32, uvy as f32 + self.fonts.height_px() as f32],
                             fg_color,
                             underline_pos,
-                            underline_color,
+                            underline_color: fg_color,
                             strikeout_pos,
-                            strikeout_color,
+                            strikeout_color: fg_color,
                         });
                         self.text_vertices.push(TextVertexMember {
                             vertex: [
@@ -1027,9 +1022,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             ],
                             fg_color,
                             underline_pos,
-                            underline_color,
+                            underline_color: fg_color,
                             strikeout_pos,
-                            strikeout_color,
+                            strikeout_color: fg_color,
                         });
                     }
                 }
