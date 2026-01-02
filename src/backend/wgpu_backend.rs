@@ -631,6 +631,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     // every glyph in the cell is positioned.
                     if last_cell_idx != Some(cell_idx) {
                         x = cell_idx as i32 * self.fonts.min_width_px() as i32;
+                        last_advance = 0;
                         self.rendered[offset].clear();
                     }
 
