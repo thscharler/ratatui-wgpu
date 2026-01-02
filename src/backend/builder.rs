@@ -5,7 +5,6 @@ use bitvec::vec::BitVec;
 use ratatui_core::style::Color;
 use rustybuzz::UnicodeBuffer;
 use web_time::Duration;
-use web_time::Instant;
 use wgpu::include_wgsl;
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
@@ -97,8 +96,8 @@ pub struct Builder<'a, P> {
     colors: ColorTable,
     reset_fg: Color,
     reset_bg: Color,
-    fast_blink: Duration,
-    slow_blink: Duration,
+    fast_blink: u8,
+    slow_blink: u8,
 }
 
 pub type DefaultBuilder<'a> = Builder<'a, DefaultPostProcessorBuilder>;
@@ -122,8 +121,8 @@ where
             colors: named::DEFAULT_COLORS,
             reset_fg: Color::Black,
             reset_bg: Color::White,
-            fast_blink: Duration::from_millis(200),
-            slow_blink: Duration::from_millis(1000),
+            fast_blink: 1,
+            slow_blink: 5,
         }
     }
 
@@ -142,8 +141,8 @@ where
             colors: named::DEFAULT_COLORS,
             reset_fg: Color::Black,
             reset_bg: Color::White,
-            fast_blink: Duration::from_millis(200),
-            slow_blink: Duration::from_millis(1000),
+            fast_blink: 1,
+            slow_blink: 5,
         }
     }
 }
@@ -170,8 +169,8 @@ where
             colors: named::DEFAULT_COLORS,
             reset_fg: Color::Black,
             reset_bg: Color::White,
-            fast_blink: Duration::from_millis(200),
-            slow_blink: Duration::from_millis(1000),
+            fast_blink: 1,
+            slow_blink: 5,
         }
     }
 
@@ -350,29 +349,35 @@ where
         self
     }
 
-    /// Use the specified interval in milliseconds as the rapid blink speed.
-    /// Note that this library doesn't spin off rendering into a separate thread
-    /// for you. If you want text to blink, you must ensure that a call to
-    /// `flush` is made frequently enough. Defaults to 200ms.
+    /// This library doesn't control the blink timer by itself, instead
+    /// it relies on [blink] being called. Every call to blink increases an
+    /// internal counter. Every time `internal % counter == 0` the blink-state
+    /// is switched.
+    ///
+    /// So. To switch with every call to blink give a counter 1.
+    /// To blink half as fast give a counter 2.
     #[must_use]
     pub fn with_rapid_blink_millis(
         mut self,
-        millis: u64,
+        counter: u8,
     ) -> Self {
-        self.fast_blink = Duration::from_millis(millis);
+        self.fast_blink = counter;
         self
     }
 
-    /// Use the specified interval in milliseconds as the slow blink speed.
-    /// Note that this library doesn't spin off rendering into a separate thread
-    /// for you. If you want text to blink, you must ensure that a call to
-    /// `flush` is made frequently enough. Defaults to 1000ms.
+    /// This library doesn't control the blink timer by itself, instead
+    /// it relies on [blink] being called. Every call to blink increases an
+    /// internal counter. Every time `internal % counter == 0` the blink-state
+    /// is switched.
+    ///
+    /// So. To switch with every call to blink give a counter 1.
+    /// To blink half as fast give a counter 2.
     #[must_use]
     pub fn with_slow_blink_millis(
         mut self,
-        millis: u64,
+        counter: u8
     ) -> Self {
-        self.slow_blink = Duration::from_millis(millis);
+        self.slow_blink = counter;
         self
     }
 }
@@ -602,11 +607,10 @@ where
             colors: self.colors,
             reset_fg,
             reset_bg,
-            fast_duration: self.fast_blink,
-            last_fast_toggle: Instant::now(),
+            blink: 0,
+            show_fast_divisor: self.fast_blink,
             show_fast: true,
-            slow_duration: self.slow_blink,
-            last_slow_toggle: Instant::now(),
+            show_slow_divisor: self.slow_blink,
             show_slow: true,
         })
     }
