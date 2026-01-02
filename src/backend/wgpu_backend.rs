@@ -857,19 +857,24 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 ),
             );
 
-            for (x, (new, old)) in new_sourced.into_iter().zip(sourced.iter_mut()).enumerate() {
-                if new != *old {
-                    let cell = y * bounds.width as usize + x;
-                    let width = old.width.max(new.width) as usize;
-                    for off in 0..width {
-                        if cell >= self.dirty_cells.len() {
-                            break;
-                        }
-                        self.dirty_cells.set(cell + off, true);
-                    }
-                    *old = new;
-                }
+            for x in 0..bounds.width as usize {
+                let cell = y * bounds.width as usize + x;
+                self.dirty_cells.set(cell, true);
             }
+
+            // for (x, (new, old)) in new_sourced.into_iter().zip(sourced.iter_mut()).enumerate() {
+            //     if new != *old {
+            //         let cell = y * bounds.width as usize + x;
+            //         let width = old.width.max(new.width) as usize;
+            //         for off in 0..width {
+            //             if cell >= self.dirty_cells.len() {
+            //                 break;
+            //             }
+            //             self.dirty_cells.set(cell + off, true);
+            //         }
+            //         *old = new;
+            //     }
+            // }
         }
 
         for (_, (cached, image, mask)) in pending_cache_updates {
