@@ -106,7 +106,7 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) post_process: Box<dyn PostProcessor + 'static>,
 
     pub(super) cells: Vec<Cell>,
-    pub(super) dirty_rows: Vec<bool>,
+    pub(super) dirty_rows: BitVec,
     pub(super) rendered: Vec<Rendered>,
     pub(super) fast_blinking: BitVec,
     pub(super) slow_blinking: BitVec,
@@ -216,12 +216,10 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         let chars_wide = width / self.fonts.min_width_px();
         let chars_high = height / self.fonts.height_px();
 
-        // if chars_wide != current_width as u32 || chars_high != current_height as u32 {
         self.cells.clear();
         self.rendered.clear();
         self.fast_blinking.clear();
         self.slow_blinking.clear();
-        // }
 
         // This always needs to be cleared because the surface is cleared when it is
         // resized. If we don't re-render the rows, we end up with a blank surface when
@@ -424,27 +422,27 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             bounds.height as usize * bounds.width as usize,
             Rendered::default,
         );
-        self.fast_blinking
-            .resize(bounds.height as usize * bounds.width as usize, false);
-        self.slow_blinking
-            .resize(bounds.height as usize * bounds.width as usize, false);
+        self.fast_blinking.resize(bounds.height as usize, false);
+        self.slow_blinking.resize(bounds.height as usize, false);
         self.dirty_rows.resize(bounds.height as usize, true);
 
         for (x, y, cell) in content {
             let index = y as usize * bounds.width as usize + x as usize;
 
-            self.fast_blinking
-                .set(index, cell.modifier.contains(Modifier::RAPID_BLINK));
-            self.slow_blinking
-                .set(index, cell.modifier.contains(Modifier::SLOW_BLINK));
+            if cell.modifier.contains(Modifier::RAPID_BLINK) {
+                self.fast_blinking.set(y as usize, true);
+            }
+            if cell.modifier.contains(Modifier::SLOW_BLINK) {
+                self.slow_blinking.set(y as usize, true);
+            }
 
-            self.cells[index] = cell.clone();
+            if cell.skip {
+                self.cells[index] = NULL_CELL;
+            } else {
+                self.cells[index] = cell.clone();
+            }
 
-            let width = cell.symbol().width().max(1);
-            let start = (index + 1).min(self.cells.len());
-            let end = (index + width).min(self.cells.len());
-            self.cells[start..end].fill(NULL_CELL);
-            self.dirty_rows[y as usize] = true;
+            self.dirty_rows.set(y as usize, true);
         }
 
         Ok(())
@@ -522,10 +520,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             self.last_fast_toggle = Instant::now();
             self.show_fast = !self.show_fast;
 
-            // todo
-            // for index in self.fast_blinking.iter_ones() {
-            //     self.dirty_cells.set(index, true);
-            // }
+            for index in self.fast_blinking.iter_ones() {
+                self.dirty_rows.set(index, true);
+            }
         }
 
         let slow_toggle_dirty = self.last_slow_toggle.elapsed() >= self.slow_duration;
@@ -533,10 +530,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             self.last_slow_toggle = Instant::now();
             self.show_slow = !self.show_slow;
 
-            // todo
-            // for index in self.slow_blinking.iter_ones() {
-            //     self.dirty_cells.set(index, true);
-            // }
+            for index in self.slow_blinking.iter_ones() {
+                self.dirty_rows.set(index, true);
+            }
         }
 
         let mut pending_cache_updates = HashMap::<_, _, RandomState>::default();
@@ -860,7 +856,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             )
         }
 
-        if self.post_process.needs_update() || self.dirty_rows.contains(&true) {
+        if self.post_process.needs_update() || self.dirty_rows.any() {
             self.bg_vertices.clear();
             self.text_vertices.clear();
             self.text_indices.clear();
@@ -878,7 +874,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                     let to_render = &self.rendered[index];
                     for (
-                        (x, y, glyph_id),
+                        (x, y, _),
                         RenderInfo {
                             cached,
                             fg,
@@ -1009,9 +1005,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 }
             }
 
-            for v in self.dirty_rows.iter_mut() {
-                *v = false;
-            }
+            self.dirty_rows.clear();
 
             self.render();
         }

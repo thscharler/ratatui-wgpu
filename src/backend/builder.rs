@@ -574,7 +574,7 @@ where
         Ok(WgpuBackend {
             post_process: Box::new(post_process),
             cells: vec![],
-            dirty_rows: vec![],
+            dirty_rows: BitVec::new(),
             rendered: vec![],
             fast_blinking: BitVec::new(),
             slow_blinking: BitVec::new(),
