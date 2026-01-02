@@ -30,9 +30,6 @@ use unicode_bidi::ParagraphBidiInfo;
 use unicode_properties::GeneralCategoryGroup;
 use unicode_properties::UnicodeEmoji;
 use unicode_properties::UnicodeGeneralCategory;
-use unicode_width::UnicodeWidthStr;
-use web_time::Duration;
-use web_time::Instant;
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 use wgpu::Buffer;
@@ -142,11 +139,10 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) reset_fg: Rgb,
     pub(super) reset_bg: Rgb,
 
-    pub(super) fast_duration: Duration,
-    pub(super) last_fast_toggle: Instant,
+    pub(super) blink: u8,
+    pub(super) show_fast_divisor: u8,
     pub(super) show_fast: bool,
-    pub(super) slow_duration: Duration,
-    pub(super) last_slow_toggle: Instant,
+    pub(super) show_slow_divisor: u8,
     pub(super) show_slow: bool,
 }
 
@@ -309,6 +305,160 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.rebuild_surface();
     }
 
+    /// Toggle blink.
+    pub fn blink(&mut self) {
+        self.bg_vertices.clear();
+        self.text_vertices.clear();
+        self.text_indices.clear();
+
+        self.blink = self.blink.wrapping_add(1);
+
+        if self.blink % self.show_fast_divisor == 0 {
+            self.show_fast = !self.show_fast;
+        }
+        if self.blink % self.show_slow_divisor == 0 {
+            self.show_slow = !self.show_slow;
+        }
+
+        let mut index_offset = 0;
+        for index in self
+            .fast_blinking
+            .iter_ones()
+            .chain(self.slow_blinking.iter_ones())
+        {
+            let to_render = &self.rendered[index];
+            for (
+                (x, y, _),
+                RenderInfo {
+                    cached,
+                    fg,
+                    bg,
+                    modifier,
+                    underline_pos_min,
+                    underline_pos_max,
+                    strikeout_pos_min,
+                    strikeout_pos_max,
+                },
+            ) in to_render.iter()
+            {
+                let alpha = if modifier.contains(Modifier::HIDDEN)
+                    | (modifier.contains(Modifier::RAPID_BLINK) && !self.show_fast)
+                    | (modifier.contains(Modifier::SLOW_BLINK) && !self.show_slow)
+                {
+                    0
+                } else if modifier.contains(Modifier::DIM) {
+                    127
+                } else {
+                    255
+                };
+
+                let reverse = modifier.contains(Modifier::REVERSED);
+                let fg_color = if reverse {
+                    self.colors.c2c(*bg, self.reset_bg)
+                } else {
+                    self.colors.c2c(*fg, self.reset_fg)
+                };
+                let [r, g, b] = fg_color;
+                let fg_color: u32 = u32::from_be_bytes([r, g, b, alpha]);
+
+                let bg_color = if reverse {
+                    self.colors.c2c(*fg, self.reset_fg)
+                } else {
+                    self.colors.c2c(*bg, self.reset_bg)
+                };
+                let [r, g, b] = bg_color;
+                let bg_color: u32 = u32::from_be_bytes([r, g, b, 255]);
+
+                for offset_x in (0..cached.width).step_by(self.fonts.min_width_px() as usize) {
+                    self.text_indices.push([
+                        index_offset,     // x, y
+                        index_offset + 1, // x + w, y
+                        index_offset + 2, // x, y + h
+                        index_offset + 2, // x, y + h
+                        index_offset + 3, // x + w, y + h
+                        index_offset + 1, // x + w, y
+                    ]);
+                    index_offset += 4;
+
+                    let x = *x as f32 + offset_x as f32;
+                    let y = *y as f32;
+                    let uvx = cached.x + offset_x;
+                    let uvy = cached.y;
+
+                    self.bg_vertices.push(TextBgVertexMember {
+                        vertex: [x, y],
+                        bg_color,
+                    });
+                    self.bg_vertices.push(TextBgVertexMember {
+                        vertex: [x + self.fonts.min_width_px() as f32, y],
+                        bg_color,
+                    });
+                    self.bg_vertices.push(TextBgVertexMember {
+                        vertex: [x, y + self.fonts.height_px() as f32],
+                        bg_color,
+                    });
+                    self.bg_vertices.push(TextBgVertexMember {
+                        vertex: [
+                            x + self.fonts.min_width_px() as f32,
+                            y + self.fonts.height_px() as f32,
+                        ],
+                        bg_color,
+                    });
+
+                    let underline_pos = ((*underline_pos_min as u32 + uvy) << 16)
+                        | (*underline_pos_max as u32 + uvy);
+                    let strikeout_pos = ((*strikeout_pos_min as u32 + uvy) << 16)
+                        | (*strikeout_pos_max as u32 + uvy);
+
+                    self.text_vertices.push(TextVertexMember {
+                        vertex: [x, y],
+                        uv: [uvx as f32, uvy as f32],
+                        fg_color,
+                        underline_pos,
+                        underline_color: fg_color,
+                        strikeout_pos,
+                        strikeout_color: fg_color,
+                    });
+                    self.text_vertices.push(TextVertexMember {
+                        vertex: [x + self.fonts.min_width_px() as f32, y],
+                        uv: [uvx as f32 + self.fonts.min_width_px() as f32, uvy as f32],
+                        fg_color,
+                        underline_pos,
+                        underline_color: fg_color,
+                        strikeout_pos,
+                        strikeout_color: fg_color,
+                    });
+                    self.text_vertices.push(TextVertexMember {
+                        vertex: [x, y + self.fonts.height_px() as f32],
+                        uv: [uvx as f32, uvy as f32 + self.fonts.height_px() as f32],
+                        fg_color,
+                        underline_pos,
+                        underline_color: fg_color,
+                        strikeout_pos,
+                        strikeout_color: fg_color,
+                    });
+                    self.text_vertices.push(TextVertexMember {
+                        vertex: [
+                            x + self.fonts.min_width_px() as f32,
+                            y + self.fonts.height_px() as f32,
+                        ],
+                        uv: [
+                            uvx as f32 + self.fonts.min_width_px() as f32,
+                            uvy as f32 + self.fonts.height_px() as f32,
+                        ],
+                        fg_color,
+                        underline_pos,
+                        underline_color: fg_color,
+                        strikeout_pos,
+                        strikeout_color: fg_color,
+                    });
+                }
+            }
+        }
+
+        self.render();
+    }
+
     fn render(&mut self) {
         let bounds = self.window_size().unwrap();
 
@@ -422,19 +572,19 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             bounds.height as usize * bounds.width as usize,
             Rendered::default,
         );
-        self.fast_blinking.resize(bounds.height as usize, false);
-        self.slow_blinking.resize(bounds.height as usize, false);
+        self.fast_blinking
+            .resize(bounds.height as usize * bounds.width as usize, false);
+        self.slow_blinking
+            .resize(bounds.height as usize * bounds.width as usize, false);
         self.dirty_rows.resize(bounds.height as usize, true);
 
         for (x, y, cell) in content {
             let index = y as usize * bounds.width as usize + x as usize;
 
-            if cell.modifier.contains(Modifier::RAPID_BLINK) {
-                self.fast_blinking.set(y as usize, true);
-            }
-            if cell.modifier.contains(Modifier::SLOW_BLINK) {
-                self.slow_blinking.set(y as usize, true);
-            }
+            self.fast_blinking
+                .set(index, cell.modifier.contains(Modifier::RAPID_BLINK));
+            self.slow_blinking
+                .set(index, cell.modifier.contains(Modifier::SLOW_BLINK));
 
             if cell.skip {
                 self.cells[index] = NULL_CELL;
@@ -514,26 +664,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         let bounds = self.size()?;
-
-        let fast_toggle_dirty = self.last_fast_toggle.elapsed() >= self.fast_duration;
-        if fast_toggle_dirty {
-            self.last_fast_toggle = Instant::now();
-            self.show_fast = !self.show_fast;
-
-            for index in self.fast_blinking.iter_ones() {
-                self.dirty_rows.set(index, true);
-            }
-        }
-
-        let slow_toggle_dirty = self.last_slow_toggle.elapsed() >= self.slow_duration;
-        if slow_toggle_dirty {
-            self.last_slow_toggle = Instant::now();
-            self.show_slow = !self.show_slow;
-
-            for index in self.slow_blinking.iter_ones() {
-                self.dirty_rows.set(index, true);
-            }
-        }
 
         let mut pending_cache_updates = HashMap::<_, _, RandomState>::default();
         for (y, row) in self.cells.chunks(bounds.width as usize).enumerate() {
