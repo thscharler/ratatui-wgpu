@@ -674,12 +674,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         Modifier::BOLD | Modifier::ITALIC
                     };
 
-                    let ch = self.row[info.cluster as usize..].chars().next().unwrap();
-                    let mut chars_wide = glyph_advance / self.fonts.em_advance() as i32;
-                    if glyph_advance % self.fonts.em_advance() as i32 != 0 {
-                        chars_wide += 1;
-                    }
-                    chars_wide = chars_wide.max(1);
+                    let chars_wide = glyph_advance as f32 / self.fonts.em_advance() as f32;
+                    let chars_wide = if chars_wide > 1.2 { 2 } else { 1 };
 
                     let key = Key {
                         style: cell.modifier.intersection(set),
@@ -777,6 +773,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     }
 
                     pending_cache_updates.entry(key).or_insert_with(|| {
+                        let ch = self.row[info.cluster as usize..].chars().next().unwrap();
                         let is_emoji = ch.is_emoji_char()
                             && !matches!(ch.general_category_group(), GeneralCategoryGroup::Number);
 
