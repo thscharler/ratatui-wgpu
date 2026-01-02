@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::iter;
 use std::mem::size_of;
 use std::num::NonZeroU64;
 
@@ -31,7 +30,6 @@ use unicode_bidi::ParagraphBidiInfo;
 use unicode_properties::GeneralCategoryGroup;
 use unicode_properties::UnicodeEmoji;
 use unicode_properties::UnicodeGeneralCategory;
-use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use web_time::Duration;
 use web_time::Instant;
@@ -92,20 +90,6 @@ pub(super) struct RenderInfo {
 /// vertices.
 type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 
-#[derive(Default, Clone, PartialEq, Eq)]
-pub(super) struct Sourced {
-    // glyphs for a cell
-    glyphs: Vec<GlyphId>,
-    // other cells that are obscured by one of the glyphs.
-    obscured: Vec<u16>,
-    // cell fg
-    fg: ratatui_core::style::Color,
-    // cell bg
-    bg: ratatui_core::style::Color,
-    // cell modifiers
-    modifier: Modifier,
-}
-
 /// A ratatui backend leveraging wgpu for rendering.
 ///
 /// Constructed using a [`Builder`](crate::Builder).
@@ -123,9 +107,7 @@ pub struct WgpuBackend<'f, 's> {
 
     pub(super) cells: Vec<Cell>,
     pub(super) dirty_rows: Vec<bool>,
-    pub(super) dirty_cells: BitVec,
     pub(super) rendered: Vec<Rendered>,
-    pub(super) sourced: Vec<Sourced>,
     pub(super) fast_blinking: BitVec,
     pub(super) slow_blinking: BitVec,
 
@@ -237,7 +219,6 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         // if chars_wide != current_width as u32 || chars_high != current_height as u32 {
         self.cells.clear();
         self.rendered.clear();
-        self.sourced.clear();
         self.fast_blinking.clear();
         self.slow_blinking.clear();
         // }
@@ -439,10 +420,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
         self.cells
             .resize(bounds.height as usize * bounds.width as usize, Cell::EMPTY);
-        self.sourced.resize_with(
-            bounds.height as usize * bounds.width as usize,
-            Sourced::default,
-        );
         self.rendered.resize_with(
             bounds.height as usize * bounds.width as usize,
             Rendered::default,
@@ -539,17 +516,16 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         let bounds = self.size()?;
-        self.dirty_cells.clear();
-        self.dirty_cells.resize(self.cells.len(), false);
 
         let fast_toggle_dirty = self.last_fast_toggle.elapsed() >= self.fast_duration;
         if fast_toggle_dirty {
             self.last_fast_toggle = Instant::now();
             self.show_fast = !self.show_fast;
 
-            for index in self.fast_blinking.iter_ones() {
-                self.dirty_cells.set(index, true);
-            }
+            // todo
+            // for index in self.fast_blinking.iter_ones() {
+            //     self.dirty_cells.set(index, true);
+            // }
         }
 
         let slow_toggle_dirty = self.last_slow_toggle.elapsed() >= self.slow_duration;
@@ -557,25 +533,19 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             self.last_slow_toggle = Instant::now();
             self.show_slow = !self.show_slow;
 
-            for index in self.slow_blinking.iter_ones() {
-                self.dirty_cells.set(index, true);
-            }
+            // todo
+            // for index in self.slow_blinking.iter_ones() {
+            //     self.dirty_cells.set(index, true);
+            // }
         }
 
         let mut pending_cache_updates = HashMap::<_, _, RandomState>::default();
-
-        for (y, (row, sourced)) in self
-            .cells
-            .chunks(bounds.width as usize)
-            .zip(self.sourced.chunks_mut(bounds.width as usize))
-            .enumerate()
-        {
+        for (y, row) in self.cells.chunks(bounds.width as usize).enumerate() {
             if !self.dirty_rows[y] {
                 continue;
             }
 
-            self.dirty_rows[y] = false;
-            let mut new_sourced = vec![Sourced::default(); bounds.width as usize];
+            let row_offset = y.min(bounds.height as usize - 1) * bounds.width as usize;
 
             // This block concatenates the strings for the row into one string for bidi
             // resolution, then maps bytes for the string to their associated cell index. It
@@ -590,6 +560,11 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 self.rowmap
                     .resize(self.rowmap.len() + cell.symbol().len(), idx as u16);
                 fontmap.push(self.fonts.font_for_cell(cell));
+            }
+
+            // rebuild from scratch
+            for cell_idx in 0..bounds.width as usize {
+                self.rendered[row_offset + cell_idx].clear();
             }
 
             let mut shape = |font: &Font,
@@ -610,11 +585,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     .zip(buffer.glyph_positions().iter())
                 {
                     let cell_idx = self.rowmap[info.cluster as usize] as usize;
-                    let offset = y.min(bounds.height as usize - 1) * bounds.width as usize
-                        + cell_idx.min(bounds.width as usize - 1);
+                    let offset = row_offset + cell_idx.min(bounds.width as usize - 1);
                     let cell = &row[cell_idx];
-                    // cell gap as ordained by the font shaper
-                    let mut skipped = None;
 
                     // Every cell has it's defined position on the grid.
                     // This position is used as a starting point from which
@@ -622,13 +594,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     if last_cell_idx != Some(cell_idx) {
                         x = cell_idx as i32 * self.fonts.min_width_px() as i32;
                         last_advance = 0;
-
-                        // rebuild from scratch
-                        self.rendered[offset].clear();
-
-                        // If we find skipped cells that means we have a ligature
-                        // or a wide character.
-                        skipped = Some(last_cell_idx.unwrap_or(0).abs_diff(cell_idx).max(1));
                     }
 
                     // if we have a combining '.undef' skip it completely.
@@ -640,6 +605,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                     last_cell_idx = Some(cell_idx);
 
+                    let ascender = self.fonts.ascender_px();
                     let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
                     let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
 
@@ -656,9 +622,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     }
                     // advance
                     x += glyph_advance;
-
-                    // do we obscure any neighboring cells?
-                    let obscured = basex as u16 / self.fonts.min_width_px() as u16;
 
                     // This assumes that we only want to underline the first character in the
                     // cluster, and that the remaining characters are all combining characters
@@ -681,22 +644,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         width: chars_wide as u8,
                         font: font.id(),
                     };
-
-                    let sourced = &mut new_sourced[cell_idx];
-                    sourced.glyphs.push(GlyphId(info.glyph_id as _));
-                    if let Some(skipped) = skipped {
-                        for i in cell_idx..cell_idx + skipped {
-                            sourced.obscured.push(i as u16);
-                        }
-                    }
-                    if cell_idx as u16 != obscured {
-                        sourced.obscured.push(obscured);
-                    }
-                    sourced.fg = cell.fg;
-                    sourced.bg = cell.bg;
-                    sourced.modifier = cell.modifier;
-
-                    let ascender = self.fonts.ascender_px();
 
                     let cached = self.cached.get(
                         &key,
@@ -861,22 +808,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     buffer,
                 ),
             );
-
-            for (x, (new, old)) in new_sourced.into_iter().zip(sourced.iter_mut()).enumerate() {
-                if new != *old {
-                    for cell in iter::once(x as u16)
-                        .chain(old.obscured.iter().copied())
-                        .chain(new.obscured.iter().copied())
-                    {
-                        let cell = y * bounds.width as usize + cell as usize;
-                        if cell >= self.dirty_cells.len() {
-                            break;
-                        }
-                        self.dirty_cells.set(cell, true);
-                    }
-                    *old = new;
-                }
-            }
         }
 
         for (_, (cached, image, mask)) in pending_cache_updates {
@@ -929,141 +860,157 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             )
         }
 
-        if self.post_process.needs_update() || self.dirty_cells.any() {
+        if self.post_process.needs_update() || self.dirty_rows.contains(&true) {
             self.bg_vertices.clear();
             self.text_vertices.clear();
             self.text_indices.clear();
 
             let mut index_offset = 0;
-            for index in self.dirty_cells.iter_ones() {
-                let to_render = &self.rendered[index];
-                for (
-                    (x, y, _),
-                    RenderInfo {
-                        cached,
-                        fg,
-                        bg,
-                        modifier,
-                        underline_pos_min,
-                        underline_pos_max,
-                        strikeout_pos_min,
-                        strikeout_pos_max,
-                    },
-                ) in to_render.iter()
-                {
-                    let alpha = if modifier.contains(Modifier::HIDDEN)
-                        | (modifier.contains(Modifier::RAPID_BLINK) & !self.show_fast)
-                        | (modifier.contains(Modifier::SLOW_BLINK) & !self.show_slow)
+            for row in self
+                .dirty_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(row, dirty)| if *dirty { Some(row) } else { None })
+            {
+                let row_index = row * bounds.width as usize;
+                for col_index in 0..bounds.width as usize {
+                    let index = row_index + col_index;
+
+                    let to_render = &self.rendered[index];
+                    for (
+                        (x, y, glyph_id),
+                        RenderInfo {
+                            cached,
+                            fg,
+                            bg,
+                            modifier,
+                            underline_pos_min,
+                            underline_pos_max,
+                            strikeout_pos_min,
+                            strikeout_pos_max,
+                        },
+                    ) in to_render.iter()
                     {
-                        0
-                    } else if modifier.contains(Modifier::DIM) {
-                        127
-                    } else {
-                        255
-                    };
+                        let alpha = if modifier.contains(Modifier::HIDDEN)
+                            | (modifier.contains(Modifier::RAPID_BLINK) & !self.show_fast)
+                            | (modifier.contains(Modifier::SLOW_BLINK) & !self.show_slow)
+                        {
+                            0
+                        } else if modifier.contains(Modifier::DIM) {
+                            127
+                        } else {
+                            255
+                        };
 
-                    let reverse = modifier.contains(Modifier::REVERSED);
-                    let fg_color = if reverse {
-                        self.colors.c2c(*bg, self.reset_bg)
-                    } else {
-                        self.colors.c2c(*fg, self.reset_fg)
-                    };
-                    let [r, g, b] = fg_color;
-                    let fg_color: u32 = u32::from_be_bytes([r, g, b, alpha]);
+                        let reverse = modifier.contains(Modifier::REVERSED);
+                        let fg_color = if reverse {
+                            self.colors.c2c(*bg, self.reset_bg)
+                        } else {
+                            self.colors.c2c(*fg, self.reset_fg)
+                        };
+                        let [r, g, b] = fg_color;
+                        let fg_color: u32 = u32::from_be_bytes([r, g, b, alpha]);
 
-                    let bg_color = if reverse {
-                        self.colors.c2c(*fg, self.reset_fg)
-                    } else {
-                        self.colors.c2c(*bg, self.reset_bg)
-                    };
-                    let [r, g, b] = bg_color;
-                    let bg_color: u32 = u32::from_be_bytes([r, g, b, 255]);
+                        let bg_color = if reverse {
+                            self.colors.c2c(*fg, self.reset_fg)
+                        } else {
+                            self.colors.c2c(*bg, self.reset_bg)
+                        };
+                        let [r, g, b] = bg_color;
+                        let bg_color: u32 = u32::from_be_bytes([r, g, b, 255]);
 
-                    for offset_x in (0..cached.width).step_by(self.fonts.min_width_px() as usize) {
-                        self.text_indices.push([
-                            index_offset,     // x, y
-                            index_offset + 1, // x + w, y
-                            index_offset + 2, // x, y + h
-                            index_offset + 2, // x, y + h
-                            index_offset + 3, // x + w, y + h
-                            index_offset + 1, // x + w, y
-                        ]);
-                        index_offset += 4;
+                        for offset_x in
+                            (0..cached.width).step_by(self.fonts.min_width_px() as usize)
+                        {
+                            self.text_indices.push([
+                                index_offset,     // x, y
+                                index_offset + 1, // x + w, y
+                                index_offset + 2, // x, y + h
+                                index_offset + 2, // x, y + h
+                                index_offset + 3, // x + w, y + h
+                                index_offset + 1, // x + w, y
+                            ]);
+                            index_offset += 4;
 
-                        let x = *x as f32 + offset_x as f32;
-                        let y = *y as f32;
-                        let uvx = cached.x + offset_x;
-                        let uvy = cached.y;
+                            let x = *x as f32 + offset_x as f32;
+                            let y = *y as f32;
+                            let uvx = cached.x + offset_x;
+                            let uvy = cached.y;
 
-                        self.bg_vertices.push(TextBgVertexMember {
-                            vertex: [x, y],
-                            bg_color,
-                        });
-                        self.bg_vertices.push(TextBgVertexMember {
-                            vertex: [x + self.fonts.min_width_px() as f32, y],
-                            bg_color,
-                        });
-                        self.bg_vertices.push(TextBgVertexMember {
-                            vertex: [x, y + self.fonts.height_px() as f32],
-                            bg_color,
-                        });
-                        self.bg_vertices.push(TextBgVertexMember {
-                            vertex: [
-                                x + self.fonts.min_width_px() as f32,
-                                y + self.fonts.height_px() as f32,
-                            ],
-                            bg_color,
-                        });
+                            self.bg_vertices.push(TextBgVertexMember {
+                                vertex: [x, y],
+                                bg_color,
+                            });
+                            self.bg_vertices.push(TextBgVertexMember {
+                                vertex: [x + self.fonts.min_width_px() as f32, y],
+                                bg_color,
+                            });
+                            self.bg_vertices.push(TextBgVertexMember {
+                                vertex: [x, y + self.fonts.height_px() as f32],
+                                bg_color,
+                            });
+                            self.bg_vertices.push(TextBgVertexMember {
+                                vertex: [
+                                    x + self.fonts.min_width_px() as f32,
+                                    y + self.fonts.height_px() as f32,
+                                ],
+                                bg_color,
+                            });
 
-                        let underline_pos = ((*underline_pos_min as u32 + uvy) << 16)
-                            | (*underline_pos_max as u32 + uvy);
-                        let strikeout_pos = ((*strikeout_pos_min as u32 + uvy) << 16)
-                            | (*strikeout_pos_max as u32 + uvy);
+                            let underline_pos = ((*underline_pos_min as u32 + uvy) << 16)
+                                | (*underline_pos_max as u32 + uvy);
+                            let strikeout_pos = ((*strikeout_pos_min as u32 + uvy) << 16)
+                                | (*strikeout_pos_max as u32 + uvy);
 
-                        self.text_vertices.push(TextVertexMember {
-                            vertex: [x, y],
-                            uv: [uvx as f32, uvy as f32],
-                            fg_color,
-                            underline_pos,
-                            underline_color: fg_color,
-                            strikeout_pos,
-                            strikeout_color: fg_color,
-                        });
-                        self.text_vertices.push(TextVertexMember {
-                            vertex: [x + self.fonts.min_width_px() as f32, y],
-                            uv: [uvx as f32 + self.fonts.min_width_px() as f32, uvy as f32],
-                            fg_color,
-                            underline_pos,
-                            underline_color: fg_color,
-                            strikeout_pos,
-                            strikeout_color: fg_color,
-                        });
-                        self.text_vertices.push(TextVertexMember {
-                            vertex: [x, y + self.fonts.height_px() as f32],
-                            uv: [uvx as f32, uvy as f32 + self.fonts.height_px() as f32],
-                            fg_color,
-                            underline_pos,
-                            underline_color: fg_color,
-                            strikeout_pos,
-                            strikeout_color: fg_color,
-                        });
-                        self.text_vertices.push(TextVertexMember {
-                            vertex: [
-                                x + self.fonts.min_width_px() as f32,
-                                y + self.fonts.height_px() as f32,
-                            ],
-                            uv: [
-                                uvx as f32 + self.fonts.min_width_px() as f32,
-                                uvy as f32 + self.fonts.height_px() as f32,
-                            ],
-                            fg_color,
-                            underline_pos,
-                            underline_color: fg_color,
-                            strikeout_pos,
-                            strikeout_color: fg_color,
-                        });
+                            self.text_vertices.push(TextVertexMember {
+                                vertex: [x, y],
+                                uv: [uvx as f32, uvy as f32],
+                                fg_color,
+                                underline_pos,
+                                underline_color: fg_color,
+                                strikeout_pos,
+                                strikeout_color: fg_color,
+                            });
+                            self.text_vertices.push(TextVertexMember {
+                                vertex: [x + self.fonts.min_width_px() as f32, y],
+                                uv: [uvx as f32 + self.fonts.min_width_px() as f32, uvy as f32],
+                                fg_color,
+                                underline_pos,
+                                underline_color: fg_color,
+                                strikeout_pos,
+                                strikeout_color: fg_color,
+                            });
+                            self.text_vertices.push(TextVertexMember {
+                                vertex: [x, y + self.fonts.height_px() as f32],
+                                uv: [uvx as f32, uvy as f32 + self.fonts.height_px() as f32],
+                                fg_color,
+                                underline_pos,
+                                underline_color: fg_color,
+                                strikeout_pos,
+                                strikeout_color: fg_color,
+                            });
+                            self.text_vertices.push(TextVertexMember {
+                                vertex: [
+                                    x + self.fonts.min_width_px() as f32,
+                                    y + self.fonts.height_px() as f32,
+                                ],
+                                uv: [
+                                    uvx as f32 + self.fonts.min_width_px() as f32,
+                                    uvy as f32 + self.fonts.height_px() as f32,
+                                ],
+                                fg_color,
+                                underline_pos,
+                                underline_color: fg_color,
+                                strikeout_pos,
+                                strikeout_color: fg_color,
+                            });
+                        }
                     }
                 }
+            }
+
+            for v in self.dirty_rows.iter_mut() {
+                *v = false;
             }
 
             self.render();
