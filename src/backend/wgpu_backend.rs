@@ -199,47 +199,6 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.rebuild_surface();
     }
 
-    /// Resize the rendering surface. This should be called e.g. to keep the
-    /// backend in sync with your window size.
-    fn rebuild_surface(&mut self) {
-        let (inset_width, inset_height) = match self.viewport {
-            Viewport::Full => (0, 0),
-            Viewport::Shrink { width, height } => (width, height),
-        };
-
-        let width = self.surface_config.width;
-        let height = self.surface_config.height;
-        self.surface.configure(&self.device, &self.surface_config);
-
-        let width = width - inset_width;
-        let height = height - inset_height;
-
-        let chars_wide = width / self.fonts.min_width_px();
-        let chars_high = height / self.fonts.height_px();
-
-        self.cells.clear();
-        self.rendered.clear();
-        self.fast_blinking.clear();
-        self.slow_blinking.clear();
-
-        // This always needs to be cleared because the surface is cleared when it is
-        // resized. If we don't re-render the rows, we end up with a blank surface when
-        // the resize is less than a character dimension.
-        self.dirty_rows.clear();
-
-        self.wgpu_state = build_wgpu_state(
-            &self.device,
-            chars_wide * self.fonts.min_width_px(),
-            chars_high * self.fonts.height_px(),
-        );
-
-        self.post_process.resize(
-            &self.device,
-            &self.wgpu_state.text_dest_view,
-            &self.surface_config,
-        );
-    }
-
     /// Get the text currently displayed on the screen.
     pub fn get_text(&self) -> String {
         let bounds = self.size().unwrap();
@@ -340,6 +299,50 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.rendered = rendered;
 
         self.render();
+    }
+}
+
+impl<'f, 's> WgpuBackend<'f, 's> {
+
+    /// Resize the rendering surface. This should be called e.g. to keep the
+    /// backend in sync with your window size.
+    fn rebuild_surface(&mut self) {
+        let (inset_width, inset_height) = match self.viewport {
+            Viewport::Full => (0, 0),
+            Viewport::Shrink { width, height } => (width, height),
+        };
+
+        let width = self.surface_config.width;
+        let height = self.surface_config.height;
+        self.surface.configure(&self.device, &self.surface_config);
+
+        let width = width - inset_width;
+        let height = height - inset_height;
+
+        let chars_wide = width / self.fonts.min_width_px();
+        let chars_high = height / self.fonts.height_px();
+
+        self.cells.clear();
+        self.rendered.clear();
+        self.fast_blinking.clear();
+        self.slow_blinking.clear();
+
+        // This always needs to be cleared because the surface is cleared when it is
+        // resized. If we don't re-render the rows, we end up with a blank surface when
+        // the resize is less than a character dimension.
+        self.dirty_rows.clear();
+
+        self.wgpu_state = build_wgpu_state(
+            &self.device,
+            chars_wide * self.fonts.min_width_px(),
+            chars_high * self.fonts.height_px(),
+        );
+
+        self.post_process.resize(
+            &self.device,
+            &self.wgpu_state.text_dest_view,
+            &self.surface_config,
+        );
     }
 
     fn append_rendered(
