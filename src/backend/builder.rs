@@ -583,6 +583,8 @@ where
             rendered: vec![],
             fast_blinking: BitVec::new(),
             slow_blinking: BitVec::new(),
+            cursor_style: Default::default(),
+            cursor_visible: true,
             cursor: (0, 0),
             surface,
             surface_config,
@@ -804,7 +806,7 @@ fn build_text_fg_compositor(
             buffers: &[VertexBufferLayout {
                 array_stride: size_of::<TextVertexMember>() as u64,
                 step_mode: VertexStepMode::Vertex,
-                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32, 3 => Uint32, 4 => Uint32, 5 => Uint32, 6 => Uint32],
+                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Uint32, 4 => Uint32, 5 => Uint32, 6 => Uint32, 7 => Uint32, 8 => Uint32, 9 => Uint32],
             }],
         },
         primitive: PrimitiveState {
