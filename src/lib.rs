@@ -162,6 +162,18 @@ type RandomState = ahash::RandomState;
 #[cfg(not(feature = "ahash"))]
 type RandomState = std::hash::RandomState;
 
+/// Cursor-styles.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum CursorStyle
+{
+    Block,
+    Underscore,
+    BoldUnderscore,
+    #[default]
+    Bar,
+    BoldBar
+}
+
 pub use backend::builder::Builder;
 pub use backend::builder::DefaultBuilder;
 pub use backend::wgpu_backend::WgpuBackend;

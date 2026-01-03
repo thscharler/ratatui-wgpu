@@ -69,7 +69,7 @@ use crate::utils::text_atlas::Entry;
 use crate::utils::text_atlas::Key;
 use crate::utils::Outline;
 use crate::utils::Painter;
-use crate::{PostProcessorBuilder, RandomState};
+use crate::{CursorStyle, PostProcessorBuilder, RandomState};
 
 const NULL_CELL: Cell = Cell::new("");
 
@@ -82,6 +82,8 @@ pub(super) struct RenderInfo {
     underline_pos_max: u16,
     strikeout_pos_min: u16,
     strikeout_pos_max: u16,
+    cursor_pos_min: u16,
+    cursor_pos_max: u16,
 }
 /// Map from (x, y, glyph) -> (cell index, cache entry).
 /// We use an IndexMap because we want a consistent rendering order for
@@ -109,6 +111,8 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) fast_blinking: BitVec,
     pub(super) slow_blinking: BitVec,
 
+    pub(super) cursor_style: CursorStyle,
+    pub(super) cursor_visible: bool,
     pub(super) cursor: (u16, u16),
 
     pub(super) viewport: Viewport,
@@ -354,6 +358,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 underline_pos_max,
                 strikeout_pos_min,
                 strikeout_pos_max,
+                cursor_pos_min,
+                cursor_pos_max,
             },
         ) in to_render.iter()
         {
@@ -375,7 +381,9 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 self.colors.c2c(*fg, self.reset_fg)
             };
             let [r, g, b] = fg_color;
-            let fg_color: u32 = u32::from_be_bytes([r, g, b, alpha]);
+            let fg_color_u32: u32 = u32::from_be_bytes([r, g, b, alpha]);
+
+            let cursor_color_u32 = u32::from_be_bytes([fg_color[0], fg_color[1], fg_color[2], 192]);
 
             let bg_color = if reverse {
                 self.colors.c2c(*fg, self.reset_fg)
@@ -383,7 +391,42 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 self.colors.c2c(*bg, self.reset_bg)
             };
             let [r, g, b] = bg_color;
-            let bg_color: u32 = u32::from_be_bytes([r, g, b, 255]);
+            let bg_color_u32: u32 = u32::from_be_bytes([r, g, b, 255]);
+
+            let underline_pos = ((*underline_pos_min as u32 + cached.y) << 16)
+                | (*underline_pos_max as u32 + cached.y);
+            let strikeout_pos = ((*strikeout_pos_min as u32 + cached.y) << 16)
+                | (*strikeout_pos_max as u32 + cached.y);
+
+            let mut cursor_pos= 0x0000_0000;
+            if self.cursor_visible && cursor_pos_min != cursor_pos_max {
+                match self.cursor_style {
+                    CursorStyle::Block => {
+                        cursor_pos = 0x0002_0000 | cached.width << 8 | 0x0000_0000; // horizontal
+                    }
+                    CursorStyle::Underscore => {
+                        cursor_pos = 0x0003_0000
+                            | (*cursor_pos_max as u32 + cached.y) << 8
+                            | (*cursor_pos_min as u32 + cached.y);
+                    }
+                    CursorStyle::BoldUnderscore => {
+                        cursor_pos = 0x0003_0000
+                            | (*cursor_pos_max as u32 + cached.y + 1) << 8
+                            | (*cursor_pos_min as u32 + cached.y);
+                    }
+                    CursorStyle::Bar => {
+                        debug!("cursor bar {} {}", cursor_pos_max, cursor_pos_min);
+                        let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
+                        debug!("width {}", cursor_width);
+                        cursor_pos = 0x0002_0000 | (cursor_width) << 8 | 0x0000_0000;
+                        debug!("flag {:08x}", cursor_pos);
+                    }
+                    CursorStyle::BoldBar => {
+                        let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
+                        cursor_pos = 0x0002_0000 | (cursor_width + 1) << 8 | 0x0000_0000;
+                    }
+                }
+            }
 
             for offset_x in (0..cached.width).step_by(self.fonts.min_width_px() as usize) {
                 self.text_indices.push([
@@ -398,60 +441,73 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
                 let x = *x as f32 + offset_x as f32;
                 let y = *y as f32;
+                // mark
                 let uvx = cached.x + offset_x;
                 let uvy = cached.y;
 
+                debug!("flag2 {:08x}", cursor_pos);
+
+                let cursor_pos =
+                      0x0002_0000
+                        | 0x0000_0000 /* horizontal */
+                        | 0x0000_0800 /* max */
+                        | 0x0000_0000 /* min */;
+
                 self.bg_vertices.push(TextBgVertexMember {
                     vertex: [x, y],
-                    bg_color,
+                    bg_color: bg_color_u32,
                 });
                 self.bg_vertices.push(TextBgVertexMember {
                     vertex: [x + self.fonts.min_width_px() as f32, y],
-                    bg_color,
+                    bg_color: bg_color_u32,
                 });
                 self.bg_vertices.push(TextBgVertexMember {
                     vertex: [x, y + self.fonts.height_px() as f32],
-                    bg_color,
+                    bg_color: bg_color_u32,
                 });
                 self.bg_vertices.push(TextBgVertexMember {
                     vertex: [
                         x + self.fonts.min_width_px() as f32,
                         y + self.fonts.height_px() as f32,
                     ],
-                    bg_color,
+                    bg_color: bg_color_u32,
                 });
-
-                let underline_pos =
-                    ((*underline_pos_min as u32 + uvy) << 16) | (*underline_pos_max as u32 + uvy);
-                let strikeout_pos =
-                    ((*strikeout_pos_min as u32 + uvy) << 16) | (*strikeout_pos_max as u32 + uvy);
 
                 self.text_vertices.push(TextVertexMember {
                     vertex: [x, y],
                     uv: [uvx as f32, uvy as f32],
-                    fg_color,
+                    uv_x0: uvx as f32,
+                    fg_color: fg_color_u32,
                     underline_pos,
-                    underline_color: fg_color,
+                    underline_color: fg_color_u32,
                     strikeout_pos,
-                    strikeout_color: fg_color,
+                    strikeout_color: fg_color_u32,
+                    cursor_pos,
+                    cursor_color: cursor_color_u32,
                 });
                 self.text_vertices.push(TextVertexMember {
                     vertex: [x + self.fonts.min_width_px() as f32, y],
                     uv: [uvx as f32 + self.fonts.min_width_px() as f32, uvy as f32],
-                    fg_color,
+                    uv_x0: uvx as f32,
+                    fg_color: fg_color_u32,
                     underline_pos,
-                    underline_color: fg_color,
+                    underline_color: fg_color_u32,
                     strikeout_pos,
-                    strikeout_color: fg_color,
+                    strikeout_color: fg_color_u32,
+                    cursor_pos,
+                    cursor_color: cursor_color_u32,
                 });
                 self.text_vertices.push(TextVertexMember {
                     vertex: [x, y + self.fonts.height_px() as f32],
                     uv: [uvx as f32, uvy as f32 + self.fonts.height_px() as f32],
-                    fg_color,
+                    uv_x0: uvx as f32,
+                    fg_color: fg_color_u32,
                     underline_pos,
-                    underline_color: fg_color,
+                    underline_color: fg_color_u32,
                     strikeout_pos,
-                    strikeout_color: fg_color,
+                    strikeout_color: fg_color_u32,
+                    cursor_pos,
+                    cursor_color: cursor_color_u32,
                 });
                 self.text_vertices.push(TextVertexMember {
                     vertex: [
@@ -462,16 +518,17 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                         uvx as f32 + self.fonts.min_width_px() as f32,
                         uvy as f32 + self.fonts.height_px() as f32,
                     ],
-                    fg_color,
+                    uv_x0: uvx as f32,
+                    fg_color: fg_color_u32,
                     underline_pos,
-                    underline_color: fg_color,
+                    underline_color: fg_color_u32,
                     strikeout_pos,
-                    strikeout_color: fg_color,
+                    strikeout_color: fg_color_u32,
+                    cursor_pos,
+                    cursor_color: cursor_color_u32,
                 });
             }
         }
-
-        self.render();
     }
 
     fn render(&mut self) {
@@ -614,10 +671,12 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     }
 
     fn hide_cursor(&mut self) -> std::io::Result<()> {
+        self.cursor_visible = false;
         Ok(())
     }
 
     fn show_cursor(&mut self) -> std::io::Result<()> {
+        self.cursor_visible = true;
         Ok(())
     }
 
@@ -786,11 +845,42 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         font: font.id(),
                     };
 
+                    // mark
                     let cached = self.cached.get(
                         &key,
                         chars_wide as u32 * self.fonts.min_width_px(),
                         self.fonts.height_px(),
                     );
+
+                    let mut cursor_pos_min = 0;
+                    let mut cursor_pos_max = 0;
+                    if self.cursor_visible && (y as u16, cell_idx as u16) == self.cursor {
+                        let cursor_position = metrics
+                            .underline_metrics()
+                            .map(|m| m.position as f32)
+                            .unwrap_or(0.0);
+                        let cursor_position = (cursor_position * advance_scale) as u32;
+                        let cursor_position = (ascender - cursor_position) as u16;
+
+                        let cursor_thickness = metrics
+                            .underline_metrics()
+                            .map(|m| m.thickness as f32)
+                            .unwrap_or(100.0); // observed average
+
+                        // default underlines are a bit thin for larger font-sizes.
+                        let cursor_thickness =
+                            (cursor_thickness * 1.3 * advance_scale).max(1.0) as u16;
+
+                        // might overflow the box
+                        if cursor_position + cursor_thickness < cached.height as u16 {
+                            cursor_pos_min = cursor_position;
+                            cursor_pos_max = cursor_pos_min + cursor_thickness;
+                        } else {
+                            cursor_pos_min =
+                                (cached.height as u16).saturating_sub(cursor_thickness);
+                            cursor_pos_max = cached.height as u16;
+                        }
+                    }
 
                     let mut underline_pos_min = 0;
                     let mut underline_pos_max = 0;
@@ -858,6 +948,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             underline_pos_max,
                             strikeout_pos_min,
                             strikeout_pos_max,
+                            cursor_pos_min,
+                            cursor_pos_max,
                         },
                     );
 
