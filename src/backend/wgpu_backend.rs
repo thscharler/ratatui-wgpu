@@ -890,7 +890,10 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                     let mut cursor_pos_min = 0;
                     let mut cursor_pos_max = 0;
-                    if first_glyph && self.cursor_visible && (cell_idx as u16, y as u16) == self.cursor {
+                    if first_glyph
+                        && self.cursor_visible
+                        && (cell_idx as u16, y as u16) == self.cursor
+                    {
                         let cursor_position = metrics
                             .underline_metrics()
                             .map(|m| m.position as f32)
