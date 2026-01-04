@@ -424,15 +424,12 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             let [r, g, b] = fg_color;
             let fg_color_u32: u32 = u32::from_be_bytes([r, g, b, alpha]);
 
-
             let cursor_color_u32 = if self.cursor_color != ratatui_core::style::Color::Reset {
                 let cur_color = self.colors.c2c(self.cursor_color, self.reset_fg);
                 u32::from_be_bytes([cur_color[0], cur_color[1], cur_color[2], 192])
             } else {
                 u32::from_be_bytes([fg_color[0], fg_color[1], fg_color[2], 192])
             };
-            debug!("cursor color {:08x}", cursor_color_u32);
-            debug!("cursor {:?} {} {}", self.cursor, self.cursor_visible, self.cursor_blink);
 
             let bg_color = if reverse {
                 self.colors.c2c(*fg, self.reset_fg)
@@ -465,11 +462,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                             | (*cursor_pos_min as u32 + cached.y);
                     }
                     CursorStyle::Bar => {
-                        debug!("cursor bar {} {}", cursor_pos_max, cursor_pos_min);
                         let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
-                        debug!("width {}", cursor_width);
                         cursor_pos = 0x0002_0000 | (cursor_width) << 8 | 0x0000_0000;
-                        debug!("flag {:08x}", cursor_pos);
                     }
                     CursorStyle::BoldBar => {
                         let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
@@ -478,99 +472,88 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 }
             }
 
-            for offset_x in (0..cached.width).step_by(self.fonts.min_width_px() as usize) {
-                self.text_indices.push([
-                    *index_offset,     // x, y
-                    *index_offset + 1, // x + w, y
-                    *index_offset + 2, // x, y + h
-                    *index_offset + 2, // x, y + h
-                    *index_offset + 3, // x + w, y + h
-                    *index_offset + 1, // x + w, y
-                ]);
-                *index_offset += 4;
+            self.text_indices.push([
+                *index_offset,     // x, y
+                *index_offset + 1, // x + w, y
+                *index_offset + 2, // x, y + h
+                *index_offset + 2, // x, y + h
+                *index_offset + 3, // x + w, y + h
+                *index_offset + 1, // x + w, y
+            ]);
+            *index_offset += 4;
 
-                let x = *x as f32 + offset_x as f32;
-                let y = *y as f32;
-                let uvx = cached.x + offset_x;
-                let uvy = cached.y;
+            let x = *x as f32;
+            let y = *y as f32;
+            let width = cached.width as f32;
+            let height = cached.height as f32;
+            let uvx = cached.x as f32;
+            let uvy = cached.y as f32;
 
-                debug!("flag2 {:08x}", cursor_pos);
+            self.bg_vertices.push(TextBgVertexMember {
+                vertex: [x, y],
+                bg_color: bg_color_u32,
+            });
+            self.bg_vertices.push(TextBgVertexMember {
+                vertex: [x + width, y],
+                bg_color: bg_color_u32,
+            });
+            self.bg_vertices.push(TextBgVertexMember {
+                vertex: [x, y + height],
+                bg_color: bg_color_u32,
+            });
+            self.bg_vertices.push(TextBgVertexMember {
+                vertex: [x + width, y + height],
+                bg_color: bg_color_u32,
+            });
 
-                self.bg_vertices.push(TextBgVertexMember {
-                    vertex: [x, y],
-                    bg_color: bg_color_u32,
-                });
-                self.bg_vertices.push(TextBgVertexMember {
-                    vertex: [x + self.fonts.min_width_px() as f32, y],
-                    bg_color: bg_color_u32,
-                });
-                self.bg_vertices.push(TextBgVertexMember {
-                    vertex: [x, y + self.fonts.height_px() as f32],
-                    bg_color: bg_color_u32,
-                });
-                self.bg_vertices.push(TextBgVertexMember {
-                    vertex: [
-                        x + self.fonts.min_width_px() as f32,
-                        y + self.fonts.height_px() as f32,
-                    ],
-                    bg_color: bg_color_u32,
-                });
-
-                self.text_vertices.push(TextVertexMember {
-                    vertex: [x, y],
-                    uv: [uvx as f32, uvy as f32],
-                    uv_x0: uvx as f32,
-                    fg_color: fg_color_u32,
-                    underline_pos,
-                    underline_color: fg_color_u32,
-                    strikeout_pos,
-                    strikeout_color: fg_color_u32,
-                    cursor_pos,
-                    cursor_color: cursor_color_u32,
-                });
-                self.text_vertices.push(TextVertexMember {
-                    vertex: [x + self.fonts.min_width_px() as f32, y],
-                    uv: [uvx as f32 + self.fonts.min_width_px() as f32, uvy as f32],
-                    uv_x0: uvx as f32,
-                    fg_color: fg_color_u32,
-                    underline_pos,
-                    underline_color: fg_color_u32,
-                    strikeout_pos,
-                    strikeout_color: fg_color_u32,
-                    cursor_pos,
-                    cursor_color: cursor_color_u32,
-                });
-                self.text_vertices.push(TextVertexMember {
-                    vertex: [x, y + self.fonts.height_px() as f32],
-                    uv: [uvx as f32, uvy as f32 + self.fonts.height_px() as f32],
-                    uv_x0: uvx as f32,
-                    fg_color: fg_color_u32,
-                    underline_pos,
-                    underline_color: fg_color_u32,
-                    strikeout_pos,
-                    strikeout_color: fg_color_u32,
-                    cursor_pos,
-                    cursor_color: cursor_color_u32,
-                });
-                self.text_vertices.push(TextVertexMember {
-                    vertex: [
-                        x + self.fonts.min_width_px() as f32,
-                        y + self.fonts.height_px() as f32,
-                    ],
-                    uv: [
-                        uvx as f32 + self.fonts.min_width_px() as f32,
-                        uvy as f32 + self.fonts.height_px() as f32,
-                    ],
-                    uv_x0: uvx as f32,
-                    fg_color: fg_color_u32,
-                    underline_pos,
-                    underline_color: fg_color_u32,
-                    strikeout_pos,
-                    strikeout_color: fg_color_u32,
-                    cursor_pos,
-                    cursor_color: cursor_color_u32,
-                });
-            }
+            self.text_vertices.push(TextVertexMember {
+                vertex: [x, y],
+                uv: [uvx, uvy],
+                uv_x0: uvx,
+                fg_color: fg_color_u32,
+                underline_pos,
+                underline_color: fg_color_u32,
+                strikeout_pos,
+                strikeout_color: fg_color_u32,
+                cursor_pos,
+                cursor_color: cursor_color_u32,
+            });
+            self.text_vertices.push(TextVertexMember {
+                vertex: [x + width, y],
+                uv: [uvx + width, uvy],
+                uv_x0: uvx,
+                fg_color: fg_color_u32,
+                underline_pos,
+                underline_color: fg_color_u32,
+                strikeout_pos,
+                strikeout_color: fg_color_u32,
+                cursor_pos,
+                cursor_color: cursor_color_u32,
+            });
+            self.text_vertices.push(TextVertexMember {
+                vertex: [x, y + height],
+                uv: [uvx, uvy + height],
+                uv_x0: uvx,
+                fg_color: fg_color_u32,
+                underline_pos,
+                underline_color: fg_color_u32,
+                strikeout_pos,
+                strikeout_color: fg_color_u32,
+                cursor_pos,
+                cursor_color: cursor_color_u32,
+            });
+            self.text_vertices.push(TextVertexMember {
+                vertex: [x + width, y + height],
+                uv: [uvx + width, uvy + height],
+                uv_x0: uvx,
+                fg_color: fg_color_u32,
+                underline_pos,
+                underline_color: fg_color_u32,
+                strikeout_pos,
+                strikeout_color: fg_color_u32,
+                cursor_pos,
+                cursor_color: cursor_color_u32,
+            });
         }
     }
 
