@@ -161,6 +161,20 @@ pub struct WgpuBackend<'f, 's> {
 }
 
 impl<'f, 's> WgpuBackend<'f, 's> {
+    pub fn set_bg_color(
+        &mut self,
+        color: ratatui_core::style::Color,
+    ) {
+        self.reset_bg = self.colors.c2c(color, [0; 3]);
+    }
+
+    pub fn set_fg_color(
+        &mut self,
+        color: ratatui_core::style::Color,
+    ) {
+        self.reset_fg = self.colors.c2c(color, [0; 3]);
+    }
+
     /// Set the cursor style
     pub fn set_cursor_style(
         &mut self,
