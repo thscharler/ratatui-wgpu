@@ -4,7 +4,6 @@ use std::num::NonZeroU64;
 use bitvec::vec::BitVec;
 use ratatui_core::style::Color;
 use rustybuzz::UnicodeBuffer;
-use web_time::Duration;
 use wgpu::include_wgsl;
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
@@ -73,8 +72,8 @@ use crate::fonts::Fonts;
 use crate::shaders::DefaultPostProcessorBuilder;
 use crate::utils::plan_cache::PlanCache;
 use crate::utils::text_atlas::Atlas;
-use crate::Error;
 use crate::Result;
+use crate::{CursorStyle, Error};
 
 const CACHE_WIDTH: u32 = 1800;
 const CACHE_HEIGHT: u32 = 1200;
@@ -98,6 +97,9 @@ pub struct Builder<'a, P> {
     reset_bg: Color,
     fast_blink: u8,
     slow_blink: u8,
+    cursor_blink: u8,
+    cursor_style: CursorStyle,
+    cursor_color: Color,
 }
 
 pub type DefaultBuilder<'a> = Builder<'a, DefaultPostProcessorBuilder>;
@@ -123,6 +125,9 @@ where
             reset_bg: Color::White,
             fast_blink: 1,
             slow_blink: 5,
+            cursor_blink: 5,
+            cursor_style: Default::default(),
+            cursor_color: Color::Reset,
         }
     }
 
@@ -143,6 +148,9 @@ where
             reset_bg: Color::White,
             fast_blink: 1,
             slow_blink: 5,
+            cursor_blink: 5,
+            cursor_style: Default::default(),
+            cursor_color: Color::Reset,
         }
     }
 }
@@ -171,6 +179,9 @@ where
             reset_bg: Color::White,
             fast_blink: 1,
             slow_blink: 5,
+            cursor_blink: 5,
+            cursor_style: Default::default(),
+            cursor_color: Color::Reset,
         }
     }
 
@@ -349,6 +360,42 @@ where
         self
     }
 
+    /// Initial cursor-color.
+    #[must_use]
+    pub fn with_cursor_color(
+        mut self,
+        color: Color
+    ) -> Self {
+        self.cursor_color = color;
+        self
+    }
+
+    /// Initial cursor-style.
+    #[must_use]
+    pub fn with_cursor_style(
+        mut self,
+        style: CursorStyle,
+    ) -> Self {
+        self.cursor_style = style;
+        self
+    }
+
+    /// This library doesn't control the cursor blink timer by itself, instead
+    /// it relies on [blink] being called. Every call to blink increases an
+    /// internal counter. Every time `internal % counter == 0` the blink-state
+    /// is switched.
+    ///
+    /// So. To switch with every call to blink give a counter 1.
+    /// To blink half as fast give a counter 2.
+    #[must_use]
+    pub fn with_cursor_blink(
+        mut self,
+        counter: u8,
+    ) -> Self {
+        self.cursor_blink = counter;
+        self
+    }
+
     /// This library doesn't control the blink timer by itself, instead
     /// it relies on [blink] being called. Every call to blink increases an
     /// internal counter. Every time `internal % counter == 0` the blink-state
@@ -357,7 +404,7 @@ where
     /// So. To switch with every call to blink give a counter 1.
     /// To blink half as fast give a counter 2.
     #[must_use]
-    pub fn with_rapid_blink_millis(
+    pub fn with_rapid_blink(
         mut self,
         counter: u8,
     ) -> Self {
@@ -373,9 +420,9 @@ where
     /// So. To switch with every call to blink give a counter 1.
     /// To blink half as fast give a counter 2.
     #[must_use]
-    pub fn with_slow_blink_millis(
+    pub fn with_slow_blink(
         mut self,
-        counter: u8
+        counter: u8,
     ) -> Self {
         self.slow_blink = counter;
         self
@@ -583,7 +630,8 @@ where
             rendered: vec![],
             fast_blinking: BitVec::new(),
             slow_blinking: BitVec::new(),
-            cursor_style: Default::default(),
+            cursor_color: self.cursor_color,
+            cursor_style: self.cursor_style,
             cursor_visible: true,
             cursor: (0, 0),
             surface,
@@ -610,10 +658,12 @@ where
             reset_fg,
             reset_bg,
             blink: 0,
-            show_fast_divisor: self.fast_blink,
-            show_fast: true,
-            show_slow_divisor: self.slow_blink,
-            show_slow: true,
+            fast_blink_divisor: self.fast_blink,
+            fast_blink: true,
+            slow_blink_divisor: self.slow_blink,
+            slow_blink: true,
+            cursor_divisor: self.cursor_blink,
+            cursor_blink: true,
         })
     }
 }
