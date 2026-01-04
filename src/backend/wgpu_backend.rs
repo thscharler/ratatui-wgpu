@@ -809,9 +809,10 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                              buffer: GlyphBuffer|
              -> UnicodeBuffer {
                 let metrics = font.font();
-                let advance_scale = self.fonts.height_px() as f32 / metrics.height() as f32;
+                let advance_scale = self.fonts.scale();
 
                 let mut x = 0;
+                let mut chars_wide = 1;
                 let mut last_cell_idx: Option<usize> = None;
                 let mut last_advance = 0;
                 for (info, position) in buffer
@@ -829,8 +830,16 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     let mut first_glyph = false;
                     if last_cell_idx != Some(cell_idx) {
                         x = cell_idx as i32 * self.fonts.min_width_px() as i32;
-                        first_glyph = true;
+
+                        if info.glyph_id == 0 {
+                            chars_wide = 1;
+                        } else {
+                            chars_wide = cell.symbol().width().max(1);
+                        }
+
                         last_advance = 0;
+
+                        first_glyph = true;
                     }
 
                     // if we have a combining '.undef' skip it completely.
@@ -842,14 +851,13 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                     last_cell_idx = Some(cell_idx);
 
-                    let ascender = self.fonts.ascender_px();
                     let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
                     let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
 
                     let basey = y as i32 * self.fonts.height_px() as i32
                         + (position.y_offset as f32 * advance_scale) as i32;
-                    let mut basex = x + glyph_offset;
 
+                    let mut basex = x + glyph_offset;
                     // special case: combining glyphs with offset == 0 && advance == 0
                     if glyph_advance == 0 && glyph_offset == 0 {
                         basex -= last_advance;
@@ -857,6 +865,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     if glyph_advance > 0 {
                         last_advance = glyph_advance;
                     }
+
                     // advance
                     x += glyph_advance;
 
@@ -872,14 +881,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         Modifier::BOLD | Modifier::ITALIC
                     };
 
-                    let chars_wide;
-                    if info.glyph_id == 0 {
-                        chars_wide = 1;
-                    } else {
-                        let w = glyph_advance as f32 / self.fonts.em_advance() as f32;
-                        chars_wide = if w > 1.2 { 2 } else { 1 };
-                    }
-
                     let key = Key {
                         style: cell.modifier.intersection(limit_modifiers),
                         glyph: info.glyph_id,
@@ -893,93 +894,25 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         self.fonts.height_px(),
                     );
 
-                    let mut cursor_pos_min = 0;
-                    let mut cursor_pos_max = 0;
-                    if first_glyph
+                    let cursor_pos = if first_glyph
                         && self.cursor_visible
                         && (cell_idx as u16, y as u16) == self.cursor
                     {
-                        let cursor_position = metrics
-                            .underline_metrics()
-                            .map(|m| m.position as f32)
-                            .unwrap_or(0.0);
-                        let cursor_position = (cursor_position * advance_scale) as u32;
-                        let cursor_position = (ascender - cursor_position) as u16;
+                        font.underline(self.fonts.height_px(), cached.height)
+                    } else {
+                        (0, 0)
+                    };
 
-                        let cursor_thickness = metrics
-                            .underline_metrics()
-                            .map(|m| m.thickness as f32)
-                            .unwrap_or(100.0); // observed average
-
-                        // default underlines are a bit thin for larger font-sizes.
-                        let cursor_thickness =
-                            (cursor_thickness * 1.3 * advance_scale).max(1.0) as u16;
-
-                        // might overflow the box
-                        if cursor_position + cursor_thickness < cached.height as u16 {
-                            cursor_pos_min = cursor_position;
-                            cursor_pos_max = cursor_pos_min + cursor_thickness;
-                        } else {
-                            cursor_pos_min =
-                                (cached.height as u16).saturating_sub(cursor_thickness);
-                            cursor_pos_max = cached.height as u16;
-                        }
-                    }
-
-                    let mut underline_pos_min = 0;
-                    let mut underline_pos_max = 0;
-                    if key.style.contains(Modifier::UNDERLINED) {
-                        let underline_position = metrics
-                            .underline_metrics()
-                            .map(|m| m.position as f32)
-                            .unwrap_or(0.0);
-                        let underline_position = (underline_position * advance_scale) as u32;
-                        let underline_position = (ascender - underline_position) as u16;
-
-                        let underline_thickness = metrics
-                            .underline_metrics()
-                            .map(|m| m.thickness as f32)
-                            .unwrap_or(100.0); // observed average
-
-                        // default underlines are a bit thin for larger font-sizes.
-                        let underline_thickness =
-                            (underline_thickness * 1.3 * advance_scale).max(1.0) as u16;
-
-                        // might overflow the box
-                        if underline_position + underline_thickness < cached.height as u16 {
-                            underline_pos_min = underline_position;
-                            underline_pos_max = underline_pos_min + underline_thickness;
-                        } else {
-                            underline_pos_min =
-                                (cached.height as u16).saturating_sub(underline_thickness);
-                            underline_pos_max = cached.height as u16;
-                        }
-                    }
-
-                    let mut strikeout_pos_min = 0;
-                    let mut strikeout_pos_max = 0;
-                    if key.style.contains(Modifier::CROSSED_OUT) {
-                        let strikeout_position = metrics
-                            .strikeout_metrics()
-                            .map(|m| m.position as f32)
-                            .unwrap_or_default();
-                        let strikeout_position = if strikeout_position > 0.0 {
-                            (ascender - (strikeout_position * advance_scale) as u32) as u16
-                        } else {
-                            (ascender as f32 * 0.7) as u16 // observed average
-                        };
-
-                        let strikeout_thickness = metrics
-                            .strikeout_metrics()
-                            .map(|m| m.thickness as f32)
-                            .unwrap_or(100.0); // observed average
-                                               // default strikeout lines are a bit thin for larger font-sizes.
-                        let strikeout_thickness =
-                            (strikeout_thickness * 1.8 * advance_scale).max(1.0) as u16;
-
-                        strikeout_pos_min = strikeout_position;
-                        strikeout_pos_max = strikeout_pos_min + strikeout_thickness;
-                    }
+                    let underline_pos = if key.style.contains(Modifier::UNDERLINED) {
+                        font.underline(self.fonts.height_px(), cached.height)
+                    } else {
+                        (0, 0)
+                    };
+                    let strikeout_pos = if key.style.contains(Modifier::CROSSED_OUT) {
+                        font.strikeout(self.fonts.height_px(), cached.height)
+                    } else {
+                        (0, 0)
+                    };
 
                     self.rendered[offset].insert(
                         (basex, basey, GlyphId(info.glyph_id as _)),
@@ -988,12 +921,12 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             fg: cell.fg,
                             bg: cell.bg,
                             modifier: cell.modifier,
-                            underline_pos_min,
-                            underline_pos_max,
-                            strikeout_pos_min,
-                            strikeout_pos_max,
-                            cursor_pos_min,
-                            cursor_pos_max,
+                            underline_pos_min: underline_pos.0 as u16,
+                            underline_pos_max: underline_pos.1 as u16,
+                            strikeout_pos_min: strikeout_pos.0 as u16,
+                            strikeout_pos_max: strikeout_pos.1 as u16,
+                            cursor_pos_min: cursor_pos.0 as u16,
+                            cursor_pos_max: cursor_pos.1 as u16,
                         },
                     );
 
@@ -1013,7 +946,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             fake_italic & !is_emoji,
                             fake_bold,
                             advance_scale,
-                            ascender,
+                            self.fonts.ascender(),
                             is_emoji,
                             is_fallback,
                         )
@@ -1205,44 +1138,57 @@ fn rasterize_glyph(
     fake_italic: bool,
     fake_bold: bool,
     advance_scale: f32,
-    ascender: u32,
+    ascender: f32,
     emoji: bool,
     is_fallback: bool,
 ) -> (CacheRect, Vec<u32>, bool) {
-    let actual_width = (metrics
+    let actual_width = metrics
         .glyph_hor_advance(GlyphId(info.glyph_id as _))
-        .unwrap_or_default() as f32
-        * advance_scale) as u32;
-    let actual_width = if actual_width == 0 {
+        .unwrap_or_default();
+    let actual_width_px = if actual_width == 0 {
         cached.width
     } else {
-        actual_width
+        (actual_width as f32 * advance_scale) as u32
     };
-
-    let rect_scale;
 
     let computed_offset_x;
     let computed_offset_y;
 
+    let scale;
+    let scale_y;
     if is_fallback {
         // glyphs from a fallback font will probably not fit.
         // scale them down either vertically or horizontally, whatever fits.
         // then align them centered.
         // and later render them at the same baseline as the regular font.
         let actual_height = (metrics.height() as f32 * advance_scale) as u32;
-        rect_scale = (cached.width as f32 / actual_width as f32)
+        let rect_scale = (cached.width as f32 / actual_width_px as f32)
             .min(cached.height as f32 / actual_height as f32);
-        computed_offset_x = (cached.width as f32 - actual_width as f32 * rect_scale) / 2.0;
+        computed_offset_x = (cached.width as f32 - actual_width_px as f32 * rect_scale) / 2.0;
         computed_offset_y = cached.height as f32 - actual_height as f32 * rect_scale;
+        scale = rect_scale * advance_scale * 2.0;
+        scale_y = scale;
+    } else if !metrics.is_monospaced() {
+        let mut rect_scale_x = cached.width as f32 / (actual_width as f32);
+
+        if rect_scale_x / advance_scale > 1.0 {
+            rect_scale_x = advance_scale;
+            computed_offset_x = (cached.width as f32 - actual_width as f32 * advance_scale) / 2.0;
+        } else {
+            computed_offset_x = 0.0;
+        }
+        computed_offset_y = 0.0;
+        scale = rect_scale_x * 2.0;
+        scale_y = advance_scale * 2.0;
     } else {
         // regular fonts will probably be from one font family and therefore have
         // more regular properties.
-        rect_scale = cached.width as f32 / actual_width as f32;
-        computed_offset_x = -(cached.width as f32 * (1.0 - rect_scale));
-        computed_offset_y = cached.height as f32 * (1.0 - rect_scale);
+        let rect_scale = cached.width as f32 / actual_width_px as f32;
+        computed_offset_x = 0.0;
+        computed_offset_y = 0.0;
+        scale = rect_scale * advance_scale * 2.0;
+        scale_y = scale;
     }
-
-    let scale = rect_scale * advance_scale * 2.0;
 
     let skew = if fake_italic {
         Transform::new(
@@ -1301,7 +1247,7 @@ fn rasterize_glyph(
         &mut target,
         skew,
         scale,
-        ascender as f32 * 2.0 + computed_offset_y,
+        ascender * advance_scale * 2.0 + computed_offset_y,
         computed_offset_x,
     );
     if metrics
@@ -1359,7 +1305,7 @@ fn rasterize_glyph(
             0.
         };
         let x_off = x_off * scale + computed_offset_x;
-        let y_off = ascender as f32 * 2.0 + computed_offset_y;
+        let y_off = ascender * advance_scale * 2.0 + computed_offset_y;
 
         let mut target = DrawTarget::from_backing(
             cached.width as i32 * 2,
@@ -1367,7 +1313,7 @@ fn rasterize_glyph(
             &mut image[..],
         );
         target.set_transform(
-            &Transform::scale(scale, -scale)
+            &Transform::scale(scale, -scale_y)
                 .then(&skew)
                 .then_translate((x_off, y_off).into()),
         );

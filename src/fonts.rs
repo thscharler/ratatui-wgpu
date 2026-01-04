@@ -1,10 +1,9 @@
-use std::hash::BuildHasher;
-use std::hash::Hasher;
-use std::hash::RandomState;
-
 use ratatui_core::buffer::Cell;
 use ratatui_core::style::Modifier;
 use rustybuzz::Face;
+use std::hash::BuildHasher;
+use std::hash::Hasher;
+use std::hash::RandomState;
 
 /// A Font which can be used for rendering.
 #[derive(Clone)]
@@ -22,8 +21,16 @@ impl<'a> Font<'a> {
         hasher.write(data);
 
         Face::from_slice(data, 0).map(|font| {
-            let em_idx = font.glyph_index('m').unwrap_or_default();
-            let advance = font.glyph_hor_advance(em_idx).unwrap_or_default() as f32;
+            let em_idx;
+            let advance;
+            if font.is_monospaced() {
+                em_idx = font.glyph_index('m').unwrap_or_default();
+                advance = font.glyph_hor_advance(em_idx).unwrap_or_default() as f32;
+            } else {
+                em_idx = font.glyph_index('n').unwrap_or_default();
+                advance = font.glyph_hor_advance(em_idx).unwrap_or_default() as f32;
+            }
+
             Self {
                 font,
                 advance,
@@ -42,28 +49,98 @@ impl Font<'_> {
         &self.font
     }
 
-    pub(crate) fn ascender(
-        &self,
-        height_px: u32,
-    ) -> u32 {
-        let scale = height_px as f32 / self.font.height() as f32;
-        (self.font.ascender() as f32 * scale) as u32
+    pub(crate) fn ascender(&self) -> f32 {
+        self.font.ascender() as f32
     }
 
-    pub(crate) fn em_advance(
+    pub(crate) fn em_advance(&self) -> f32 {
+        self.advance
+    }
+
+    pub(crate) fn scale(
         &self,
         height_px: u32,
-    ) -> u32 {
-        let scale = height_px as f32 / self.font.height() as f32;
-        (self.advance * scale) as u32
+    ) -> f32 {
+        height_px as f32 / self.font.height() as f32
     }
 
     pub(crate) fn char_width(
         &self,
         height_px: u32,
     ) -> u32 {
-        let scale = height_px as f32 / self.font.height() as f32;
-        (self.advance * scale) as u32
+        (self.advance * self.scale(height_px)) as u32
+    }
+
+    pub(crate) fn underline(
+        &self,
+        height_px: u32,
+        box_height_px: u32,
+    ) -> (u32, u32) {
+        let scale = self.scale(height_px);
+
+        let ascender = self.font.ascender() as f32;
+
+        let underline_position = self
+            .font
+            .underline_metrics()
+            .map(|m| m.position as f32)
+            .unwrap_or(0.0);
+        let underline_position = ascender - underline_position;
+
+        let underline_thickness = self
+            .font
+            .underline_metrics()
+            .map(|m| m.thickness as f32)
+            .unwrap_or(100.0); /* observed average */
+        // default underlines are a bit thin for larger font-sizes.
+        let underline_thickness = underline_thickness * 1.3;
+
+        let underline_position = (underline_position * scale) as u32;
+        let underline_thickness = ((underline_thickness * scale) as u32).max(1);
+
+        // might overflow the box
+        if underline_position + underline_thickness < box_height_px {
+            (underline_position, underline_position + underline_thickness)
+        } else {
+            (
+                box_height_px.saturating_sub(underline_thickness),
+                box_height_px,
+            )
+        }
+    }
+
+    pub(crate) fn strikeout(
+        &self,
+        height_px: u32,
+        _box_height: u32,
+    ) -> (u32, u32) {
+        let scale = self.scale(height_px);
+
+        let ascender = self.font.ascender() as f32;
+
+        let strikeout_position = self
+            .font
+            .strikeout_metrics()
+            .map(|m| m.position as f32)
+            .unwrap_or_default();
+        let strikeout_position = if strikeout_position > 0.0 {
+            ascender - strikeout_position
+        } else {
+            ascender as f32 * 0.7 /* observed average */
+        };
+
+        let strikeout_thickness = self
+            .font
+            .strikeout_metrics()
+            .map(|m| m.thickness as f32)
+            .unwrap_or(100.0); /* observed average */
+        // default strikeout lines are a bit thin for larger font-sizes.
+        let strikeout_thickness = strikeout_thickness * 1.8;
+
+        (
+            (strikeout_position * scale) as u32,
+            ((strikeout_position + strikeout_thickness) * scale) as u32,
+        )
     }
 }
 
@@ -73,10 +150,11 @@ impl Font<'_> {
 /// similar aspect ratio, or you may get unexpected results during rendering due
 /// to fallback.
 pub struct Fonts<'a> {
-    char_width: u32,
-    char_height: u32,
-    ascender: u32,
-    em_advance: u32,
+    char_width_px: u32,
+    char_height_px: u32,
+    scale: f32,
+    ascender: f32,
+    em_advance: f32,
 
     last_resort: Vec<Font<'a>>,
 
@@ -100,10 +178,11 @@ impl<'a> Fonts<'a> {
         size_px: u32,
     ) -> Self {
         Self {
-            char_width: font.char_width(size_px),
-            char_height: size_px,
-            ascender: font.ascender(size_px),
-            em_advance: font.em_advance(size_px),
+            char_width_px: font.char_width(size_px),
+            char_height_px: size_px,
+            scale: font.scale(size_px),
+            ascender: font.ascender(),
+            em_advance: font.em_advance(),
             last_resort: vec![font],
             has_fonts: false,
             regular: vec![],
@@ -128,10 +207,11 @@ impl<'a> Fonts<'a> {
         size_px: u32,
     ) -> Self {
         Self {
-            char_width: size_px / 2,
-            char_height: size_px,
-            ascender: size_px,
-            em_advance: size_px / 2,
+            char_width_px: size_px / 2,
+            char_height_px: size_px,
+            scale: 1.0,
+            ascender: size_px as f32,
+            em_advance: size_px as f32 / 2.0,
             last_resort: fonts,
             has_fonts: false,
             regular: vec![],
@@ -144,17 +224,21 @@ impl<'a> Fonts<'a> {
     /// The height (in pixels) of all fonts.
     #[inline]
     pub fn height_px(&self) -> u32 {
-        self.char_height
+        self.char_height_px
     }
 
     #[inline]
-    pub fn ascender_px(&self) -> u32 {
+    pub fn ascender(&self) -> f32 {
         self.ascender
     }
 
     #[inline]
-    pub fn em_advance(&self) -> u32 {
+    pub fn em_advance(&self) -> f32 {
         self.em_advance
+    }
+
+    pub fn scale(&self) -> f32 {
+        self.scale
     }
 
     /// Change the height of all fonts in this collection to the specified
@@ -163,21 +247,35 @@ impl<'a> Fonts<'a> {
         &mut self,
         height_px: u32,
     ) {
-        self.char_height = height_px;
+        self.char_height_px = height_px;
 
         if self.has_fonts {
-            (self.char_width, self.ascender, self.em_advance) = self
+            (
+                self.char_width_px,
+                self.scale,
+                self.ascender,
+                self.em_advance,
+            ) = self
                 .regular
                 .iter()
                 .chain(self.bold.iter())
                 .chain(self.italic.iter())
                 .chain(self.bold_italic.iter())
-                .map(|font| (font.char_width(height_px), font.ascender(height_px), font.em_advance(height_px)))
-                .min()
+                .map(|font| {
+                    (
+                        font.char_width(height_px),
+                        font.scale(height_px),
+                        font.ascender(),
+                        font.em_advance(),
+                    )
+                })
+                .next() /* first is fine */
                 .unwrap_or_default();
         } else {
-            self.char_width = self.char_height / 2;
-            self.ascender = self.char_height;
+            self.char_width_px = self.char_height_px / 2;
+            self.scale = 1.0;
+            self.ascender = self.char_height_px as f32;
+            self.em_advance = self.char_height_px as f32 / 2.0;
         }
     }
 
@@ -222,17 +320,18 @@ impl<'a> Fonts<'a> {
             }
         }
 
-        self.bold_italic[bold_italic_len..].sort_by_key(|font| font.char_width(self.char_height));
-        self.italic[italic_len..].sort_by_key(|font| font.char_width(self.char_height));
-        self.bold[bold_len..].sort_by_key(|font| font.char_width(self.char_height));
-        self.regular[regular_len..].sort_by_key(|font| font.char_width(self.char_height));
+        self.bold_italic[bold_italic_len..]
+            .sort_by_key(|font| font.char_width(self.char_height_px));
+        self.italic[italic_len..].sort_by_key(|font| font.char_width(self.char_height_px));
+        self.bold[bold_len..].sort_by_key(|font| font.char_width(self.char_height_px));
+        self.regular[regular_len..].sort_by_key(|font| font.char_width(self.char_height_px));
 
         self.has_fonts = !self.bold_italic.is_empty()
             || !self.italic.is_empty()
             || !self.bold.is_empty()
             || !self.regular.is_empty();
 
-        self.set_size_px(self.char_height);
+        self.set_size_px(self.char_height_px);
     }
 
     /// Add a new collection of fonts for regular styled text. These fonts will
@@ -242,7 +341,7 @@ impl<'a> Fonts<'a> {
         fonts: impl IntoIterator<Item = Font<'a>>,
     ) {
         self.regular.extend(fonts.into_iter());
-        self.set_size_px(self.char_height);
+        self.set_size_px(self.char_height_px);
         self.has_fonts = self.has_fonts || !self.regular.is_empty();
     }
 
@@ -257,7 +356,7 @@ impl<'a> Fonts<'a> {
         fonts: impl IntoIterator<Item = Font<'a>>,
     ) {
         self.bold.extend(fonts.into_iter());
-        self.set_size_px(self.char_height);
+        self.set_size_px(self.char_height_px);
         self.has_fonts = self.has_fonts || !self.bold.is_empty();
     }
 
@@ -273,7 +372,7 @@ impl<'a> Fonts<'a> {
         fonts: impl IntoIterator<Item = Font<'a>>,
     ) {
         self.italic.extend(fonts.into_iter());
-        self.set_size_px(self.char_height);
+        self.set_size_px(self.char_height_px);
         self.has_fonts = self.has_fonts || !self.italic.is_empty();
     }
 
@@ -288,7 +387,7 @@ impl<'a> Fonts<'a> {
         fonts: impl IntoIterator<Item = Font<'a>>,
     ) {
         self.bold_italic.extend(fonts.into_iter());
-        self.set_size_px(self.char_height);
+        self.set_size_px(self.char_height_px);
         self.has_fonts = self.has_fonts || !self.bold_italic.is_empty();
     }
 }
@@ -296,7 +395,7 @@ impl<'a> Fonts<'a> {
 impl<'a> Fonts<'a> {
     /// The minimum width (in pixels) across all fonts.
     pub(crate) fn min_width_px(&self) -> u32 {
-        self.char_width
+        self.char_width_px
     }
 
     pub(crate) fn count(&self) -> usize {
