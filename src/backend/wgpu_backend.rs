@@ -31,6 +31,7 @@ use unicode_bidi::ParagraphBidiInfo;
 use unicode_properties::GeneralCategoryGroup;
 use unicode_properties::UnicodeEmoji;
 use unicode_properties::UnicodeGeneralCategory;
+use unicode_width::UnicodeWidthStr;
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 use wgpu::Buffer;
@@ -71,7 +72,11 @@ use crate::utils::Outline;
 use crate::utils::Painter;
 use crate::{CursorStyle, PostProcessorBuilder, RandomState};
 
-const NULL_CELL: Cell = Cell::new("");
+const NULL_CELL: Cell = {
+    let mut c = Cell::new("");
+    c.skip = true;
+    c
+};
 
 #[derive(Debug)]
 pub(super) struct RenderInfo {
@@ -684,10 +689,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             self.slow_blinking
                 .set(index, cell.modifier.contains(Modifier::SLOW_BLINK));
 
-            if cell.skip {
-                self.cells[index] = NULL_CELL;
-            } else {
-                self.cells[index] = cell.clone();
+            self.cells[index] = cell.clone();
+            for i in 1..self.cells[index].symbol().width() {
+                self.cells[index + i] = NULL_CELL;
             }
 
             self.dirty_rows.set(y as usize, true);
@@ -785,9 +789,11 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
             let mut fontmap = Vec::with_capacity(self.rowmap.capacity());
             for (idx, cell) in row.iter().enumerate() {
-                self.row.push_str(cell.symbol());
-                self.rowmap
-                    .resize(self.rowmap.len() + cell.symbol().len(), idx as u16);
+                if !cell.skip {
+                    self.row.push_str(cell.symbol());
+                    self.rowmap
+                        .resize(self.rowmap.len() + cell.symbol().len(), idx as u16);
+                }
                 fontmap.push(self.fonts.font_for_cell(cell));
             }
 
