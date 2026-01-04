@@ -20,10 +20,10 @@ use ratatui_core::layout::Position;
 use ratatui_core::layout::Size;
 use ratatui_core::style::Modifier;
 use rustybuzz::shape_with_plan;
-use rustybuzz::ttf_parser::GlyphId;
 use rustybuzz::ttf_parser::RasterGlyphImage;
 use rustybuzz::ttf_parser::RasterImageFormat;
 use rustybuzz::ttf_parser::RgbaColor;
+use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::GlyphBuffer;
 use rustybuzz::UnicodeBuffer;
 use unicode_bidi::Level;
@@ -872,8 +872,13 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         Modifier::BOLD | Modifier::ITALIC
                     };
 
-                    let chars_wide = glyph_advance as f32 / self.fonts.em_advance() as f32;
-                    let chars_wide = if chars_wide > 1.2 { 2 } else { 1 };
+                    let chars_wide;
+                    if info.glyph_id == 0 {
+                        chars_wide = 1;
+                    } else {
+                        let w = glyph_advance as f32 / self.fonts.em_advance() as f32;
+                        chars_wide = if w > 1.2 { 2 } else { 1 };
+                    }
 
                     let key = Key {
                         style: cell.modifier.intersection(limit_modifiers),
@@ -1001,7 +1006,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         let is_emoji = ch.is_emoji_char()
                             && !matches!(ch.general_category_group(), GeneralCategoryGroup::Number);
 
-                        let (rect, image, colored) = rasterize_glyph(
+                        rasterize_glyph(
                             cached,
                             metrics,
                             info,
@@ -1011,8 +1016,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             ascender,
                             is_emoji,
                             is_fallback,
-                        );
-                        (rect, image, colored)
+                        )
                     });
                 }
 
@@ -1253,6 +1257,38 @@ fn rasterize_glyph(
         Transform::default()
     };
 
+    if info.glyph_id == 0 {
+        let mut image = vec![0u32; cached.width as usize * cached.height as usize];
+
+        let mut target =
+            DrawTarget::from_backing(cached.width as i32, cached.height as i32, &mut image[..]);
+
+        let w1 = cached.width as f32 * 0.33;
+        let w2 = cached.width as f32 * 0.67;
+        let h1 = cached.height as f32 * 0.33;
+        let h2 = cached.height as f32 * 0.67;
+
+        let mut render = Outline::default();
+        render.move_to(w1, h1);
+        render.line_to(w2, h1);
+        render.line_to(w2, h2);
+        render.line_to(w1, h2);
+        render.close();
+        let path = render.finish();
+
+        target.stroke(
+            &path,
+            &raqote::Source::Solid(SolidSource::from_unpremultiplied_argb(255, 255, 255, 255)),
+            &StrokeStyle {
+                width: 1.5,
+                ..Default::default()
+            },
+            &DrawOptions::new(),
+        );
+
+        return (*cached, image, false);
+    }
+
     let mut image = vec![0u32; cached.width as usize * 2 * cached.height as usize * 2];
     let mut target = DrawTarget::from_backing(
         cached.width as i32 * 2,
@@ -1352,7 +1388,8 @@ fn rasterize_glyph(
                 },
                 &DrawOptions::new(),
             );
-        } else if emoji || is_fallback {
+        } else if emoji && is_fallback {
+            // noto-emoji and open-moji need this.
             target.stroke(
                 &path,
                 &raqote::Source::Solid(SolidSource::from_unpremultiplied_argb(255, 255, 255, 255)),
