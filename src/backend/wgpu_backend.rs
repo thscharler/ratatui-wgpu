@@ -1179,13 +1179,20 @@ fn rasterize_glyph(
         // scale them down either vertically or horizontally, whatever fits.
         // then align them centered.
         // and later render them at the same baseline as the regular font.
-        let actual_height = (metrics.height() as f32 * advance_scale) as u32;
-        let rect_scale = (cached.width as f32 / actual_width_px as f32)
-            .min(cached.height as f32 / actual_height as f32);
-        computed_offset_x = (cached.width as f32 - actual_width_px as f32 * rect_scale) / 2.0;
-        computed_offset_y = cached.height as f32 - actual_height as f32 * rect_scale;
-        scale = rect_scale * advance_scale * 2.0;
-        scale_y = scale;
+
+        let mut rect_scale_x = cached.width as f32 / (actual_width as f32);
+        let mut rect_scale_y = cached.height as f32 / metrics.height() as f32;
+
+        if rect_scale_x / rect_scale_y > 1.0 {
+            rect_scale_x = rect_scale_y;
+            computed_offset_x = (cached.width as f32 - actual_width as f32 * rect_scale_y) / 2.0;
+        } else {
+            computed_offset_x = 0.0;
+        }
+        computed_offset_y = 0.0;
+
+        scale = rect_scale_x * 2.0;
+        scale_y = rect_scale_y * 2.0;
     } else if !metrics.is_monospaced() {
         let mut rect_scale_x = cached.width as f32 / (actual_width as f32);
 
@@ -1196,14 +1203,18 @@ fn rasterize_glyph(
             computed_offset_x = 0.0;
         }
         computed_offset_y = 0.0;
+
         scale = rect_scale_x * 2.0;
         scale_y = advance_scale * 2.0;
     } else {
         // regular fonts will probably be from one font family and therefore have
         // more regular properties.
         let rect_scale = cached.width as f32 / actual_width_px as f32;
+
+        // don't offset. font should fit.
         computed_offset_x = 0.0;
         computed_offset_y = 0.0;
+
         scale = rect_scale * advance_scale * 2.0;
         scale_y = scale;
     }
