@@ -58,6 +58,7 @@ pub trait PostProcessor {
     /// </div>
     fn process(
         &mut self,
+        margin_color: u32,
         encoder: &mut CommandEncoder,
         queue: &Queue,
         text_view: &TextureView,

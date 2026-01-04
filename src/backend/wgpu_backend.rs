@@ -646,7 +646,11 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             return;
         };
 
+        let bg_color_u32 =
+            u32::from_be_bytes([self.reset_bg[0], self.reset_bg[1], self.reset_bg[2], 255]);
+
         self.post_process.process(
+            bg_color_u32,
             &mut encoder,
             &self.queue,
             &self.wgpu_state.text_dest_view,

@@ -261,6 +261,7 @@ impl PostProcessor for Pipeline {
 
     fn process(
         &mut self,
+        margin_color: u32,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         _text_view: &wgpu::TextureView,

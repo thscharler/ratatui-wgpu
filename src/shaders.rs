@@ -62,8 +62,10 @@ use wgpu::VertexState;
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     screen_size: [f32; 2],
+    margin_color: u32,
     preserve_aspect: u32,
     use_srgb: u32,
+    _fill: u32,
 }
 
 #[derive(Default)]
@@ -228,6 +230,7 @@ impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERV
 
     fn process(
         &mut self,
+        margin_color: u32,
         encoder: &mut CommandEncoder,
         queue: &Queue,
         _text_view: &TextureView,
@@ -244,8 +247,10 @@ impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERV
                 .unwrap();
             uniforms.copy_from_slice(bytemuck::bytes_of(&Uniforms {
                 screen_size: [surface_config.width as f32, surface_config.height as f32],
+                margin_color,
                 preserve_aspect: u32::from(PRESERVE_ASPECT),
                 use_srgb: u32::from(surface_config.format.is_srgb()),
+                _fill: 0,
             }));
         }
 
@@ -773,6 +778,7 @@ impl PostProcessor for CrtPostProcessor {
 
     fn process(
         &mut self,
+        _margin_color: u32,
         encoder: &mut CommandEncoder,
         queue: &Queue,
         _text_view: &TextureView,
