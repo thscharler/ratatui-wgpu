@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::mem;
 use std::mem::size_of;
 use std::num::NonZeroU64;
+use std::{iter, mem};
 
 use bitvec::order::Lsb0;
 use bitvec::slice::BitSlice;
@@ -73,6 +73,7 @@ use crate::{CursorStyle, PostProcessorBuilder, RandomState};
 
 const NULL_CELL: Cell = Cell::new("");
 
+#[derive(Debug)]
 pub(super) struct RenderInfo {
     cached: CacheRect,
     fg: ratatui_core::style::Color,
@@ -111,9 +112,12 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) fast_blinking: BitVec,
     pub(super) slow_blinking: BitVec,
 
+    pub(super) cursor_color: ratatui_core::style::Color,
     pub(super) cursor_style: CursorStyle,
     pub(super) cursor_visible: bool,
     pub(super) cursor: (u16, u16),
+    pub(super) cursor_divisor: u8,
+    pub(super) cursor_blink: bool,
 
     pub(super) viewport: Viewport,
 
@@ -145,13 +149,39 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) reset_bg: Rgb,
 
     pub(super) blink: u8,
-    pub(super) show_fast_divisor: u8,
-    pub(super) show_fast: bool,
-    pub(super) show_slow_divisor: u8,
-    pub(super) show_slow: bool,
+    pub(super) fast_blink_divisor: u8,
+    pub(super) fast_blink: bool,
+    pub(super) slow_blink_divisor: u8,
+    pub(super) slow_blink: bool,
 }
 
 impl<'f, 's> WgpuBackend<'f, 's> {
+    /// Set the cursor style
+    pub fn set_cursor_style(
+        &mut self,
+        style: CursorStyle,
+    ) {
+        self.cursor_style = style;
+    }
+
+    /// Current cursor style.
+    pub fn cursor_style(&self) -> CursorStyle {
+        self.cursor_style
+    }
+
+    /// Set the cursor color.
+    pub fn set_cursor_color(
+        &mut self,
+        color: ratatui_core::style::Color,
+    ) {
+        self.cursor_color = color;
+    }
+
+    /// Current cursor color.
+    pub fn cursor_color(&self) -> ratatui_core::style::Color {
+        self.cursor_color
+    }
+
     /// Get the [`PostProcessor`] associated with this backend.
     pub fn post_processor(&self) -> &dyn PostProcessor {
         self.post_process.as_ref()
@@ -271,17 +301,22 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
     /// Toggle blink.
     pub fn blink(&mut self) {
+        let bounds = self.size().unwrap();
+
         self.bg_vertices.clear();
         self.text_vertices.clear();
         self.text_indices.clear();
 
         self.blink = self.blink.wrapping_add(1);
 
-        if self.blink % self.show_fast_divisor == 0 {
-            self.show_fast = !self.show_fast;
+        if self.fast_blink_divisor != 0 && self.blink % self.fast_blink_divisor == 0 {
+            self.fast_blink = !self.fast_blink;
         }
-        if self.blink % self.show_slow_divisor == 0 {
-            self.show_slow = !self.show_slow;
+        if self.slow_blink_divisor != 0 && self.blink % self.slow_blink_divisor == 0 {
+            self.slow_blink = !self.slow_blink;
+        }
+        if self.cursor_divisor != 0 && self.blink % self.cursor_divisor == 0 {
+            self.cursor_blink = !self.cursor_blink;
         }
 
         let mut index_offset = 0;
@@ -291,10 +326,14 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             .fast_blinking
             .iter_ones()
             .chain(self.slow_blinking.iter_ones())
+            .chain(iter::once(
+                self.cursor.1 as usize * bounds.width as usize + self.cursor.0 as usize,
+            ))
             .collect::<Vec<_>>();
         for index in cell_indexes {
-            let to_render = &rendered[index];
-            self.append_rendered(to_render, &mut index_offset);
+            if let Some(to_render) = rendered.get(index) {
+                self.append_rendered(to_render, &mut index_offset);
+            }
         }
         self.rendered = rendered;
 
@@ -303,7 +342,6 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 }
 
 impl<'f, 's> WgpuBackend<'f, 's> {
-
     /// Resize the rendering surface. This should be called e.g. to keep the
     /// backend in sync with your window size.
     fn rebuild_surface(&mut self) {
@@ -367,8 +405,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         ) in to_render.iter()
         {
             let alpha = if modifier.contains(Modifier::HIDDEN)
-                | (modifier.contains(Modifier::RAPID_BLINK) && !self.show_fast)
-                | (modifier.contains(Modifier::SLOW_BLINK) && !self.show_slow)
+                | (modifier.contains(Modifier::RAPID_BLINK) && !self.fast_blink)
+                | (modifier.contains(Modifier::SLOW_BLINK) && !self.slow_blink)
             {
                 0
             } else if modifier.contains(Modifier::DIM) {
@@ -386,7 +424,15 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             let [r, g, b] = fg_color;
             let fg_color_u32: u32 = u32::from_be_bytes([r, g, b, alpha]);
 
-            let cursor_color_u32 = u32::from_be_bytes([fg_color[0], fg_color[1], fg_color[2], 192]);
+
+            let cursor_color_u32 = if self.cursor_color != ratatui_core::style::Color::Reset {
+                let cur_color = self.colors.c2c(self.cursor_color, self.reset_fg);
+                u32::from_be_bytes([cur_color[0], cur_color[1], cur_color[2], 192])
+            } else {
+                u32::from_be_bytes([fg_color[0], fg_color[1], fg_color[2], 192])
+            };
+            debug!("cursor color {:08x}", cursor_color_u32);
+            debug!("cursor {:?} {} {}", self.cursor, self.cursor_visible, self.cursor_blink);
 
             let bg_color = if reverse {
                 self.colors.c2c(*fg, self.reset_fg)
@@ -401,11 +447,12 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             let strikeout_pos = ((*strikeout_pos_min as u32 + cached.y) << 16)
                 | (*strikeout_pos_max as u32 + cached.y);
 
-            let mut cursor_pos= 0x0000_0000;
-            if self.cursor_visible && cursor_pos_min != cursor_pos_max {
+            let mut cursor_pos = 0x0000_0000;
+            if self.cursor_visible && self.cursor_blink && cursor_pos_min != cursor_pos_max {
                 match self.cursor_style {
                     CursorStyle::Block => {
-                        cursor_pos = 0x0002_0000 | cached.width << 8 | 0x0000_0000; // horizontal
+                        cursor_pos = 0x0002_0000 | cached.width << 8 | 0x0000_0000;
+                        // horizontal
                     }
                     CursorStyle::Underscore => {
                         cursor_pos = 0x0003_0000
@@ -414,7 +461,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                     }
                     CursorStyle::BoldUnderscore => {
                         cursor_pos = 0x0003_0000
-                            | (*cursor_pos_max as u32 + cached.y + 1) << 8
+                            | (*cursor_pos_max as u32 + cached.y + 2) << 8
                             | (*cursor_pos_min as u32 + cached.y);
                     }
                     CursorStyle::Bar => {
@@ -426,7 +473,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                     }
                     CursorStyle::BoldBar => {
                         let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
-                        cursor_pos = 0x0002_0000 | (cursor_width + 1) << 8 | 0x0000_0000;
+                        cursor_pos = 0x0002_0000 | (cursor_width + 2) << 8 | 0x0000_0000;
                     }
                 }
             }
@@ -444,17 +491,10 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
                 let x = *x as f32 + offset_x as f32;
                 let y = *y as f32;
-                // mark
                 let uvx = cached.x + offset_x;
                 let uvy = cached.y;
 
                 debug!("flag2 {:08x}", cursor_pos);
-
-                let cursor_pos =
-                      0x0002_0000
-                        | 0x0000_0000 /* horizontal */
-                        | 0x0000_0800 /* max */
-                        | 0x0000_0000 /* min */;
 
                 self.bg_vertices.push(TextBgVertexMember {
                     vertex: [x, y],
@@ -742,6 +782,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     fn flush(&mut self) -> std::io::Result<()> {
         let bounds = self.size()?;
 
+        // always show cursor on flush.
+        self.cursor_blink = true;
+
         let mut pending_cache_updates = HashMap::<_, _, RandomState>::default();
         for (y, row) in self.cells.chunks(bounds.width as usize).enumerate() {
             if !self.dirty_rows[y] {
@@ -794,8 +837,10 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     // Every cell has it's defined position on the grid.
                     // This position is used as a starting point from which
                     // every glyph in the cell is positioned.
+                    let mut first_glyph = false;
                     if last_cell_idx != Some(cell_idx) {
                         x = cell_idx as i32 * self.fonts.min_width_px() as i32;
+                        first_glyph = true;
                         last_advance = 0;
                     }
 
@@ -829,7 +874,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     // This assumes that we only want to underline the first character in the
                     // cluster, and that the remaining characters are all combining characters
                     // which don't need an underline.
-                    let set = if glyph_advance != 0 {
+                    let limit_modifiers = if first_glyph {
                         Modifier::BOLD
                             | Modifier::ITALIC
                             | Modifier::UNDERLINED
@@ -842,13 +887,12 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     let chars_wide = if chars_wide > 1.2 { 2 } else { 1 };
 
                     let key = Key {
-                        style: cell.modifier.intersection(set),
+                        style: cell.modifier.intersection(limit_modifiers),
                         glyph: info.glyph_id,
                         width: chars_wide as u8,
                         font: font.id(),
                     };
 
-                    // mark
                     let cached = self.cached.get(
                         &key,
                         chars_wide as u32 * self.fonts.min_width_px(),
@@ -857,7 +901,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                     let mut cursor_pos_min = 0;
                     let mut cursor_pos_max = 0;
-                    if self.cursor_visible && (y as u16, cell_idx as u16) == self.cursor {
+                    if first_glyph && self.cursor_visible && (cell_idx as u16, y as u16) == self.cursor {
                         let cursor_position = metrics
                             .underline_metrics()
                             .map(|m| m.position as f32)
