@@ -1019,6 +1019,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 buffer.clear()
             };
 
+            // run text shaping
             let bidi = ParagraphBidiInfo::new(&self.row, None);
             let (levels, runs) = bidi.visual_runs(0..bidi.levels.len());
 
@@ -1043,7 +1044,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         || current_is_fallback != is_fallback
                         || current_level != level
                     {
-                        let mut buffer = std::mem::take(&mut self.buffer);
+                        let mut buffer = mem::take(&mut self.buffer);
 
                         self.buffer = shape(
                             current_font,
@@ -1068,7 +1069,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 }
             }
 
-            let mut buffer = std::mem::take(&mut self.buffer);
+            let mut buffer = mem::take(&mut self.buffer);
             self.buffer = shape(
                 current_font,
                 current_fake_bold,
@@ -1082,7 +1083,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             );
         }
 
-        for (_, (cached, image, mask)) in pending_cache_updates {
+        // cache glyphs
+        for (_, (cached, image, colored)) in pending_cache_updates {
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.text_cache,
@@ -1118,7 +1120,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     },
                     aspect: TextureAspect::All,
                 },
-                &vec![if mask { 255 } else { 0 }; (cached.width * cached.height) as usize],
+                &vec![if colored { 255 } else { 0 }; (cached.width * cached.height) as usize],
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(cached.width),
@@ -1139,12 +1141,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
             let mut index_offset = 0;
             let rendered = mem::take(&mut self.rendered);
-            let rows = self
-                .dirty_rows
-                .iter()
-                .enumerate()
-                .filter_map(|(row, dirty)| if *dirty { Some(row) } else { None })
-                .collect::<Vec<_>>();
+            let rows = self.dirty_rows.iter_ones().collect::<Vec<_>>();
             for row in rows {
                 let row_index = row * bounds.width as usize;
                 for col_index in 0..bounds.width as usize {
