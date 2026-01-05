@@ -319,6 +319,7 @@ struct TextCacheBgPipeline {
     pipeline: RenderPipeline,
     fs_uniforms: BindGroup,
     atlas_bindings: BindGroup,
+    bg_bindings: BindGroup,
 }
 
 struct TextCacheFgPipeline {

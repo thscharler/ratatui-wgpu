@@ -4,7 +4,6 @@ use std::num::NonZeroU64;
 use bitvec::vec::BitVec;
 use ratatui_core::style::Color;
 use rustybuzz::UnicodeBuffer;
-use wgpu::{include_wgsl, Features};
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 use wgpu::vertex_attr_array;
@@ -56,6 +55,7 @@ use wgpu::TextureViewDimension;
 use wgpu::VertexBufferLayout;
 use wgpu::VertexState;
 use wgpu::VertexStepMode;
+use wgpu::{include_wgsl, Features};
 
 use crate::backend::wgpu_backend::WgpuBackend;
 use crate::backend::TextBgVertexMember;
@@ -506,7 +506,9 @@ where
             adapter.limits()
         };
 
-        let features = Features::BUFFER_BINDING_ARRAY;
+        let features = Features::BUFFER_BINDING_ARRAY
+            | Features::VERTEX_WRITABLE_STORAGE
+            | Features::STORAGE_RESOURCE_BINDING_ARRAY;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_limits: limits.clone(),
@@ -591,11 +593,18 @@ where
         let c_width = (drawable_width / self.fonts.min_width_px()) as usize;
         let c_height = (drawable_height / self.fonts.height_px()) as usize;
 
+        let bg_size_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("BG Size buffer"),
+            size: size_of::<[u32; 2]>() as u64,
+            mapped_at_creation: false,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
+
         let bg_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("BG Buffer"),
             size: (c_width * c_height * size_of::<[f32; 4]>()) as u64,
-            usage: BufferUsages::UNIFORM,
             mapped_at_creation: false,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
         let text_screen_size_buffer = device.create_buffer(&BufferDescriptor {
@@ -613,10 +622,9 @@ where
 
         let text_bg_compositor = build_text_bg_compositor(
             &device,
-            c_width,
-            c_height,
-            &bg_buffer,
             &text_screen_size_buffer,
+            &bg_size_buffer,
+            &bg_buffer,
             &text_mask_view,
             &sampler,
         );
@@ -669,6 +677,7 @@ where
             bg_vertices: vec![],
             text_indices: vec![],
             text_vertices: vec![],
+            bg_size_buffer,
             text_screen_size_buffer,
             text_bg_compositor,
             text_fg_compositor,
@@ -690,10 +699,9 @@ where
 
 fn build_text_bg_compositor(
     device: &Device,
-    c_width: usize,
-    c_height: usize,
-    bg_buffer: &Buffer,
     screen_size: &Buffer,
+    bg_size: &Buffer,
+    bg_buffer: &Buffer,
     mask_view: &TextureView,
     sampler: &Sampler,
 ) -> TextCacheBgPipeline {
@@ -701,16 +709,28 @@ fn build_text_bg_compositor(
 
     let vertex_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("Text Bg Compositor Uniforms Binding Layout"),
-        entries: &[BindGroupLayoutEntry {
-            binding: 0,
-            visibility: ShaderStages::VERTEX,
-            ty: BindingType::Buffer {
-                ty: BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
+        entries: &[
+            BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
+                },
+                count: None,
             },
-            count: None,
-        }],
+            BindGroupLayoutEntry {
+                binding: 1,
+                visibility: ShaderStages::VERTEX_FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(size_of::<[u32; 2]>() as u64).unwrap()),
+                },
+                count: None,
+            },
+        ],
     });
 
     let fragment_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -732,26 +752,37 @@ fn build_text_bg_compositor(
                 ty: BindingType::Sampler(SamplerBindingType::Filtering),
                 count: None,
             },
-            BindGroupLayoutEntry {
-                binding: 2,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
-                },
-                count: NonZeroU32::new((c_width * c_height) as u32),
-            },
         ],
+    });
+
+    let bg_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("Text Bg Compositor Color Binding Layout"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::VERTEX_FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
+            },
+            // before we have to rebuild this all the time ...
+            count: NonZeroU32::new((80_000) as u32),
+        }],
     });
 
     let fs_uniforms = device.create_bind_group(&BindGroupDescriptor {
         label: Some("Text Bg Compositor Uniforms Binding"),
         layout: &vertex_shader_layout,
-        entries: &[BindGroupEntry {
-            binding: 0,
-            resource: screen_size.as_entire_binding(),
-        }],
+        entries: &[
+            BindGroupEntry {
+                binding: 0,
+                resource: screen_size.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: bg_size.as_entire_binding(),
+            },
+        ],
     });
 
     let atlas_bindings = device.create_bind_group(&BindGroupDescriptor {
@@ -766,16 +797,25 @@ fn build_text_bg_compositor(
                 binding: 1,
                 resource: BindingResource::Sampler(sampler),
             },
-            BindGroupEntry {
-                binding: 2,
-                resource: bg_buffer.as_entire_binding(),
-            },
         ],
+    });
+
+    let bg_bindings = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("Text Bg Compositor Color Binding"),
+        layout: &bg_shader_layout,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: bg_buffer.as_entire_binding(),
+        }],
     });
 
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Text Bg Compositor Layout"),
-        bind_group_layouts: &[&vertex_shader_layout],
+        bind_group_layouts: &[
+            &vertex_shader_layout,
+            &fragment_shader_layout,
+            &bg_shader_layout,
+        ],
         immediate_size: 0,
     });
 
@@ -816,6 +856,7 @@ fn build_text_bg_compositor(
         pipeline,
         fs_uniforms,
         atlas_bindings,
+        bg_bindings,
     }
 }
 

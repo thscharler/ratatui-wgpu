@@ -144,6 +144,7 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) text_vertices: Vec<TextVertexMember>,
     pub(super) text_bg_compositor: TextCacheBgPipeline,
     pub(super) text_fg_compositor: TextCacheFgPipeline,
+    pub(super) bg_size_buffer: Buffer,
     pub(super) text_screen_size_buffer: Buffer,
 
     pub(super) wgpu_state: WgpuState,
@@ -601,6 +602,19 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                     0.0,
                     0.0,
                 ]));
+
+                let mut uniforms = self
+                    .queue
+                    .write_buffer_with(
+                        &self.bg_size_buffer,
+                        0,
+                        NonZeroU64::new(size_of::<[u32; 2]>() as u64).unwrap(),
+                    )
+                    .unwrap();
+                uniforms.copy_from_slice(bytemuck::cast_slice(&[
+                    bounds.columns_rows.width as u32,
+                    bounds.columns_rows.height as u32,
+                ]));
             }
 
             let bg_vertices = self.device.create_buffer_init(&BufferInitDescriptor {
@@ -640,7 +654,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
                 text_render_pass.set_pipeline(&self.text_bg_compositor.pipeline);
                 text_render_pass.set_bind_group(0, &self.text_bg_compositor.fs_uniforms, &[]);
-                text_render_pass.set_bind_group(1, &self.text_fg_compositor.atlas_bindings, &[]);
+                text_render_pass.set_bind_group(1, &self.text_bg_compositor.atlas_bindings, &[]);
+                text_render_pass.set_bind_group(2, &self.text_bg_compositor.bg_bindings, &[]);
                 text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
                 text_render_pass.draw_indexed(0..(self.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
 

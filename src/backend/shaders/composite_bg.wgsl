@@ -5,6 +5,16 @@ struct VertexOutput {
 
 @group(0) @binding(0)
 var<uniform> ScreenSize: vec4<f32>;
+@group(0) @binding(1)
+var<uniform> BgSize: vec2<u32>;
+
+@group(1) @binding(0)
+var Mask: texture_2d<f32>;
+@group(1) @binding(1)
+var Sampler: sampler;
+
+@group(2) @binding(0)
+var<storage, read_write> BgBuffer: array<vec4<f32>>;
 
 @vertex
 fn vs_main(
@@ -12,20 +22,17 @@ fn vs_main(
     @location(1) BgColor: u32,
 ) -> VertexOutput {
     let gl_Position = vec4<f32>((2.0 * VertexCoord / ScreenSize.xy - 1.0) * vec2(1.0, -1.0), 0.0, 1.0);
+
+    if BgSize[0] == 1 {
+        BgBuffer[17].r = 0.5;
+    }
+
     return VertexOutput(BgColor, gl_Position);
 }
 
 struct FragmentOutput {
     @location(0) FragColor: vec4<f32>,
 }
-
-@group(1) @binding(0)
-var Mask: texture_2d<f32>;
-@group(1) @binding(1)
-var Sampler: sampler;
-@group(1) @binding(2)
-var<storage> BgBuffer: array<vec4<f32>>;
-
 
 fn unpack_color(color: u32) -> vec4<f32> {
     return vec4<f32>(
