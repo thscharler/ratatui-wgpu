@@ -640,6 +640,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
                 text_render_pass.set_pipeline(&self.text_bg_compositor.pipeline);
                 text_render_pass.set_bind_group(0, &self.text_bg_compositor.fs_uniforms, &[]);
+                text_render_pass.set_bind_group(1, &self.text_fg_compositor.atlas_bindings, &[]);
                 text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
                 text_render_pass.draw_indexed(0..(self.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
 
@@ -956,6 +957,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         let ch = self.row[info.cluster as usize..].chars().next().unwrap();
                         let is_emoji = ch.is_emoji_char()
                             && !matches!(ch.general_category_group(), GeneralCategoryGroup::Number);
+                        let is_box_draw = ch as u32 >= 0x2500 && ch as u32 <= 0x259F;
 
                         rasterize_glyph(
                             cached,
@@ -966,6 +968,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             advance_scale,
                             self.fonts.ascender(),
                             is_emoji,
+                            is_box_draw,
                             is_fallback,
                         )
                     });
@@ -1039,7 +1042,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         }
 
         // cache glyphs
-        for (_, (cached, image, colored)) in pending_cache_updates {
+        for (_, (cached, image, box_draw, colored)) in pending_cache_updates {
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.text_cache,
@@ -1075,7 +1078,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     },
                     aspect: TextureAspect::All,
                 },
-                &vec![if colored { 255 } else { 0 }; (cached.width * cached.height) as usize],
+                &bg_mask(&image, cached.width, cached.height, box_draw, colored),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(cached.width),
@@ -1149,6 +1152,109 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     type Error = std::io::Error;
 }
 
+fn bg_mask(
+    image: &[u32],
+    width: u32,
+    height: u32,
+    box_draw: bool,
+    color: bool,
+) -> Vec<u8> {
+    let width = width as usize;
+    let height = height as usize;
+
+    if color {
+        return vec![255; width * height];
+    } else if !box_draw {
+        return vec![0; width * height];
+    } else {
+        let mut mask = vec![0; width * height];
+        let mut occupied = vec![0.0f32; width * height];
+
+        // top to bottom
+        let mut scan = vec![1.0f32; width];
+        for y in 0..height {
+            for x in 0..width {
+                let idx = y * width + x;
+
+                if occupied[idx] < scan[x] {
+                    occupied[idx] = scan[x];
+                    mask[idx] = 51;
+                }
+
+                if image[idx] & 0xFF == 0xFF {
+                    scan[x] = 0.0;
+                }
+            }
+
+            scan.iter_mut()
+                .for_each(|v| *v = (*v - 1.0 / height as f32).max(0.0))
+        }
+
+        // bottom to top
+        scan.iter_mut().for_each(|v| *v = 1.0);
+        for y in (0..height).rev() {
+            for x in 0..width {
+                let idx = y * width + x;
+
+                if occupied[idx] < scan[x] {
+                    occupied[idx] = scan[x];
+                    mask[idx] = 153;
+                }
+
+                if image[idx] & 0xFF == 0xFF {
+                    scan[x] = 0.0;
+                }
+            }
+
+            scan.iter_mut()
+                .for_each(|v| *v = (*v - 1.0 / height as f32).max(0.0))
+        }
+
+        // left to right
+        scan.resize(height, 1.0);
+        scan.iter_mut().for_each(|v| *v = 1.0);
+        for x in 0..width {
+            for y in 0..height {
+                let idx = y * width + x;
+
+                if occupied[idx] < scan[y] {
+                    occupied[idx] = scan[y];
+                    mask[idx] = 204;
+                }
+
+                if image[idx] & 0xFF == 0xFF {
+                    scan[y] = 0.0;
+                }
+            }
+
+            scan.iter_mut()
+                .for_each(|v| *v = (*v - 1.0 / width as f32).max(0.0))
+        }
+
+        // right to left
+        scan.iter_mut().for_each(|v| *v = 1.0);
+        for x in (0..width).rev() {
+            for y in 0..height {
+                let idx = y * width + x;
+
+                if occupied[idx] < scan[y] {
+                    occupied[idx] = scan[y];
+                    mask[idx] = 102;
+                }
+
+                if image[idx] & 0xFF == 0xFF {
+                    scan[y] = 0.0;
+                }
+            }
+
+            scan.iter_mut()
+                .for_each(|v| *v = (*v - 1.0 / width as f32).max(0.0))
+        }
+
+        mask
+    }
+}
+
 fn rasterize_glyph(
     cached: Entry,
     metrics: &rustybuzz::Face,
@@ -1158,8 +1264,9 @@ fn rasterize_glyph(
     advance_scale: f32,
     ascender: f32,
     emoji: bool,
+    box_draw: bool,
     is_fallback: bool,
-) -> (CacheRect, Vec<u32>, bool) {
+) -> (CacheRect, Vec<u32>, bool, bool) {
     let actual_width = metrics
         .glyph_hor_advance(GlyphId(info.glyph_id as _))
         .unwrap_or_default();
@@ -1261,7 +1368,7 @@ fn rasterize_glyph(
             &DrawOptions::new(),
         );
 
-        return (*cached, image, false);
+        return (*cached, image, false, false);
     }
 
     let mut image = vec![0u32; cached.width as usize * 2 * cached.height as usize * 2];
@@ -1312,12 +1419,14 @@ fn rasterize_glyph(
             *argb = u32::from_le_bytes([r, g, b, a]);
         }
 
-        return (*cached, final_image, true);
+        return (*cached, final_image, box_draw, true);
     }
 
     if let Some(raster) = metrics.glyph_raster_image(GlyphId(info.glyph_id as _), u16::MAX) {
-        if let Some(value) = extract_color_image(&mut image, raster, cached, advance_scale) {
-            return value;
+        if let Some((cache_rect, image)) =
+            extract_color_image(&mut image, raster, cached, advance_scale)
+        {
+            return (cache_rect, image, false, true);
         }
     }
 
@@ -1394,13 +1503,15 @@ fn rasterize_glyph(
             },
         );
 
-        return (*cached, final_image.into_vec(), false);
+        return (*cached, final_image.into_vec(), box_draw, false);
     }
 
     if let Some(raster) = metrics.glyph_raster_image(GlyphId(info.glyph_id as _), u16::MAX) {
         if raster.width != 0 && raster.height != 0 {
-            if let Some(value) = extract_bw_image(&mut image, raster, cached, advance_scale) {
-                return value;
+            if let Some((cached, image)) =
+                extract_bw_image(&mut image, raster, cached, advance_scale)
+            {
+                return (cached, image, box_draw, false);
             }
         }
     }
@@ -1408,6 +1519,7 @@ fn rasterize_glyph(
     (
         *cached,
         vec![0u32; cached.width as usize * cached.height as usize],
+        box_draw,
         false,
     )
 }
@@ -1417,7 +1529,7 @@ fn extract_color_image(
     raster: RasterGlyphImage,
     cached: Entry,
     scale: f32,
-) -> Option<(CacheRect, Vec<u32>, bool)> {
+) -> Option<(CacheRect, Vec<u32>)> {
     match raster.format {
         RasterImageFormat::PNG => {
             #[cfg(feature = "png")]
@@ -1486,7 +1598,7 @@ fn extract_color_image(
         *argb = u32::from_le_bytes([r, g, b, a]);
     }
 
-    Some((*cached, final_image, true))
+    Some((*cached, final_image))
 }
 
 fn extract_bw_image(
@@ -1494,7 +1606,7 @@ fn extract_bw_image(
     raster: RasterGlyphImage,
     cached: Entry,
     scale: f32,
-) -> Option<(CacheRect, Vec<u32>, bool)> {
+) -> Option<(CacheRect, Vec<u32>)> {
     image.resize(raster.width as usize * raster.height as usize, 0);
 
     match raster.format {
@@ -1548,7 +1660,7 @@ fn extract_bw_image(
         *argb = u32::from_le_bytes([r, g, b, a]);
     }
 
-    Some((*cached, final_image, false))
+    Some((*cached, final_image))
 }
 
 fn from_gray_unpacked<const BITS: usize, const ENTRIES: usize>(

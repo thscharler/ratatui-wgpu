@@ -19,6 +19,14 @@ struct FragmentOutput {
     @location(0) FragColor: vec4<f32>,
 }
 
+@group(1) @binding(0)
+var Mask: texture_2d<f32>;
+@group(1) @binding(1)
+var Sampler: sampler;
+@group(1) @binding(2)
+var<storage> BgBuffer: array<vec4<f32>>;
+
+
 fn unpack_color(color: u32) -> vec4<f32> {
     return vec4<f32>(
         f32(color >> 24u) / 255.0,
