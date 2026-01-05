@@ -597,7 +597,6 @@ where
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
-        // mark
         let bg_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("BG Buffer"),
             size: (70000 * size_of::<u32>()) as u64,
@@ -766,7 +765,6 @@ fn build_text_bg_compositor(
         ],
     });
 
-    // mark
     let bg_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("Text Bg Compositor Color Binding Layout"),
         entries: &[BindGroupLayoutEntry {
@@ -816,7 +814,6 @@ fn build_text_bg_compositor(
         ],
     });
 
-    // mark
     let bg_bindings = device.create_bind_group(&BindGroupDescriptor {
         label: Some("Text Bg Compositor Color Binding"),
         layout: &bg_shader_layout,
@@ -846,7 +843,7 @@ fn build_text_bg_compositor(
             buffers: &[VertexBufferLayout {
                 array_stride: size_of::<TextBgVertexMember>() as u64,
                 step_mode: VertexStepMode::Vertex,
-                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32, 3 => Uint32],
+                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32],
             }],
         },
         primitive: PrimitiveState {

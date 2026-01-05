@@ -464,7 +464,11 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             let bg_color_u32: u32 = u32::from_be_bytes([r, g, b, 255]);
 
             // write bg
-            self.queue.write_buffer(&self.bg_buffer, (index * size_of::<u32>()) as u64, &bg_color_u32.to_le_bytes());
+            self.queue.write_buffer(
+                &self.bg_buffer,
+                (index * size_of::<u32>()) as u64,
+                &bg_color_u32.to_le_bytes(),
+            );
 
             let underline_pos = ((*underline_pos_min as u32 + cached.y) << 16)
                 | (*underline_pos_max as u32 + cached.y);
@@ -520,25 +524,21 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 vertex: [x, y],
                 uv: [uvx, uvy],
                 bg_index: index as u32,
-                bg_color: bg_color_u32,
             });
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x + width, y],
                 uv: [uvx + width, uvy],
                 bg_index: index as u32,
-                bg_color: bg_color_u32,
             });
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x, y + height],
                 uv: [uvx, uvy + height],
                 bg_index: index as u32,
-                bg_color: bg_color_u32,
             });
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x + width, y + height],
                 uv: [uvx + width, uvy + height],
                 bg_index: index as u32,
-                bg_color: bg_color_u32,
             });
 
             self.text_vertices.push(TextVertexMember {
@@ -1146,8 +1146,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             self.queue.submit([]);
             self.render();
         }
-
-
 
         Ok(())
     }

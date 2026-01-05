@@ -298,7 +298,6 @@ struct TextBgVertexMember {
     vertex: [f32; 2],
     uv: [f32; 2],
     bg_index: u32,
-    bg_color: u32,
 }
 
 // Vertex + UVCoord + Color
