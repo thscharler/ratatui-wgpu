@@ -511,22 +511,18 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x, y],
-                uv: [uvx, uvy],
                 bg_color: bg_color_u32,
             });
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x + width, y],
-                uv: [uvx + width, uvy],
                 bg_color: bg_color_u32,
             });
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x, y + height],
-                uv: [uvx, uvy + height],
                 bg_color: bg_color_u32,
             });
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x + width, y + height],
-                uv: [uvx + width, uvy + height],
                 bg_color: bg_color_u32,
             });
 

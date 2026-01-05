@@ -720,7 +720,7 @@ fn build_text_bg_compositor(
             buffers: &[VertexBufferLayout {
                 array_stride: size_of::<TextBgVertexMember>() as u64,
                 step_mode: VertexStepMode::Vertex,
-                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32],
+                attributes: &vertex_attr_array![0 => Float32x2, 1 => Uint32],
             }],
         },
         primitive: PrimitiveState {
