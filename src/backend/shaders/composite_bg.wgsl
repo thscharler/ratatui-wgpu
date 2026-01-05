@@ -34,16 +34,6 @@ struct FragmentOutput {
     @location(0) FragColor: vec4<f32>,
 }
 
-fn unpack_color(color: u32) -> vec4<f32> {
-    return vec4<f32>(
-        f32(color >> 24u) / 255.0,
-        f32((color >> 16u) & 0xFFu) / 255.0,
-        f32((color >> 8u) & 0xFFu) / 255.0,
-        f32(color & 0xFFu) / 255.0,
-    );
-}
-
-
 @fragment
 fn fs_main(
     @location(0) UV: vec2<f32>,
@@ -85,7 +75,7 @@ fn fs_main(
         fragmentColor = BgBuffer[idx];
     } // else exact
 
-    let fragmentColorUnpacked = unpack_color(fragmentColor);
+    let fragmentColorUnpacked = unpack4x8unorm(fragmentColor);
 
     return FragmentOutput(fragmentColorUnpacked);
 }

@@ -445,14 +445,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             } else {
                 self.colors.c2c(*fg, self.reset_fg)
             };
-            let [r, g, b] = fg_color;
-            let fg_color_u32: u32 = u32::from_be_bytes([r, g, b, alpha]);
+            let fg_color_u32: u32 = u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], alpha]);
 
             let cursor_color_u32 = if self.cursor_color != ratatui_core::style::Color::Reset {
                 let cur_color = self.colors.c2c(self.cursor_color, self.reset_fg);
-                u32::from_be_bytes([cur_color[0], cur_color[1], cur_color[2], 99])
+                u32::from_le_bytes([cur_color[0], cur_color[1], cur_color[2], 99])
             } else {
-                u32::from_be_bytes([fg_color[0], fg_color[1], fg_color[2], 99])
+                u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], 99])
             };
 
             let bg_color = if reverse {
@@ -460,14 +459,10 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             } else {
                 self.colors.c2c(*bg, self.reset_bg)
             };
-            let [r, g, b] = bg_color;
-            let bg_color_u32: u32 = u32::from_be_bytes([r, g, b, 255]);
-
-            // write bg
             self.queue.write_buffer(
                 &self.bg_buffer,
                 (index * size_of::<u32>()) as u64,
-                &bg_color_u32.to_le_bytes(),
+                &[bg_color[0], bg_color[1], bg_color[2], 255],
             );
 
             let underline_pos = ((*underline_pos_min as u32 + cached.y) << 16)
@@ -547,9 +542,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 uv_x0: uvx,
                 fg_color: fg_color_u32,
                 underline_pos,
-                underline_color: fg_color_u32,
                 strikeout_pos,
-                strikeout_color: fg_color_u32,
                 cursor_pos,
                 cursor_color: cursor_color_u32,
             });
@@ -559,9 +552,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 uv_x0: uvx,
                 fg_color: fg_color_u32,
                 underline_pos,
-                underline_color: fg_color_u32,
                 strikeout_pos,
-                strikeout_color: fg_color_u32,
                 cursor_pos,
                 cursor_color: cursor_color_u32,
             });
@@ -571,9 +562,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 uv_x0: uvx,
                 fg_color: fg_color_u32,
                 underline_pos,
-                underline_color: fg_color_u32,
                 strikeout_pos,
-                strikeout_color: fg_color_u32,
                 cursor_pos,
                 cursor_color: cursor_color_u32,
             });
@@ -583,9 +572,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 uv_x0: uvx,
                 fg_color: fg_color_u32,
                 underline_pos,
-                underline_color: fg_color_u32,
                 strikeout_pos,
-                strikeout_color: fg_color_u32,
                 cursor_pos,
                 cursor_color: cursor_color_u32,
             });

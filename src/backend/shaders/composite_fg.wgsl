@@ -3,11 +3,9 @@ struct VertexOutput {
     @location(1) @interpolate(flat) UVx0: f32,
     @location(2) @interpolate(flat) FgColor: u32,
     @location(3) @interpolate(flat) UnderlinePos: u32,
-    @location(4) @interpolate(flat) UnderlineColor: u32,
-    @location(5) @interpolate(flat) StrikeoutPos: u32,
-    @location(6) @interpolate(flat) StrikeoutColor: u32,
-    @location(7) @interpolate(flat) CursorPos: u32,
-    @location(8) @interpolate(flat) CursorColor: u32,
+    @location(4) @interpolate(flat) StrikeoutPos: u32,
+    @location(5) @interpolate(flat) CursorPos: u32,
+    @location(6) @interpolate(flat) CursorColor: u32,
     @builtin(position) gl_Position: vec4<f32>,
 }
 
@@ -21,11 +19,9 @@ fn vs_main(
     @location(2) UVx0: f32,
     @location(3) FgColor: u32,
     @location(4) UnderlinePos: u32,
-    @location(5) UnderlineColor: u32,
-    @location(6) StrikeoutPos: u32,
-    @location(7) StrikeoutColor: u32,
-    @location(8) CursorPos: u32,
-    @location(9) CursorColor: u32,
+    @location(5) StrikeoutPos: u32,
+    @location(6) CursorPos: u32,
+    @location(7) CursorColor: u32,
 ) -> VertexOutput {
     let gl_Position = vec4<f32>((2.0 * VertexCoord / ScreenSize.xy - 1.0) * vec2(1.0, -1.0), 0.0, 1.0);
 
@@ -33,9 +29,7 @@ fn vs_main(
         UVx0,
         FgColor,
         UnderlinePos,
-        UnderlineColor,
         StrikeoutPos,
-        StrikeoutColor,
         CursorPos,
         CursorColor,
         gl_Position);
@@ -55,31 +49,18 @@ var Sampler: sampler;
 @group(1) @binding(3) 
 var<uniform> AtlasSize: vec4<f32>;
 
-fn unpack_color(color: u32) -> vec4<f32> {
-    return vec4<f32>(
-        f32(color >> 24u) / 255.0,
-        f32((color >> 16u) & 0xFFu) / 255.0,
-        f32((color >> 8u) & 0xFFu) / 255.0,
-        f32(color & 0xFFu) / 255.0,
-    );
-}
-
 @fragment
 fn fs_main(
     @location(0) UV: vec2<f32>,
     @location(1) @interpolate(flat) UVx0: f32,
     @location(2) @interpolate(flat) FgColor: u32,
     @location(3) @interpolate(flat) UnderlinePos: u32,
-    @location(4) @interpolate(flat) UnderlineColor: u32,
-    @location(5) @interpolate(flat) StrikeoutPos: u32,
-    @location(6) @interpolate(flat) StrikeoutColor: u32,
-    @location(7) @interpolate(flat) CursorPos: u32,
-    @location(8) @interpolate(flat) CursorColor: u32,
+    @location(4) @interpolate(flat) StrikeoutPos: u32,
+    @location(5) @interpolate(flat) CursorPos: u32,
+    @location(6) @interpolate(flat) CursorColor: u32,
 ) -> FragmentOutput {
-    let underLineColorUnpacked = unpack_color(UnderlineColor);
-    let strikeOutColorUnpacked = unpack_color(StrikeoutColor);
-    var cursorColorUnpacked = unpack_color(CursorColor);
-    var fgColorUnpacked = unpack_color(FgColor);
+    var cursorColorUnpacked = unpack4x8unorm(CursorColor);
+    var fgColorUnpacked = unpack4x8unorm(FgColor);
 
     var textureColor = textureSample(Atlas, Sampler, UV / AtlasSize.xy);
 
@@ -89,15 +70,15 @@ fn fs_main(
 
     let mask = textureSample(Mask, Sampler, UV / AtlasSize.xy);
 
-    var fgColor = select(fgColorUnpacked, textureColor, mask.r == 1.0);
+    var fragmentColor = select(fgColorUnpacked, textureColor, mask.r == 1.0);
 
     let yMax = UnderlinePos & 0xFFFFu;
     let yMin = UnderlinePos >> 16u;
-    fgColor = select(fgColor, underLineColorUnpacked, u32(UV.y) >= yMin && u32(UV.y) < yMax);
+    fragmentColor = select(fragmentColor, fgColorUnpacked, u32(UV.y) >= yMin && u32(UV.y) < yMax);
 
     let y2Max = StrikeoutPos & 0xFFFFu;
     let y2Min = StrikeoutPos >> 16u;
-    fgColor = select(fgColor, strikeOutColorUnpacked, u32(UV.y) >= y2Min && u32(UV.y) < y2Max);
+    fragmentColor = select(fragmentColor, fgColorUnpacked, u32(UV.y) >= y2Min && u32(UV.y) < y2Max);
 
     let cur_vis = CursorPos & 0x00020000u;
     let cur_hor = CursorPos & 0x00010000u;
@@ -112,20 +93,20 @@ fn fs_main(
             is_cur = u32(UV.x-UVx0) >= cur_min && u32(UV.x-UVx0) < cur_max;
         }
         if is_cur {
-             if fgColor.a > 0.0 {
-                 let fg_a = fgColor.a * (1.0 - cursorColorUnpacked.a);
+             if fragmentColor.a > 0.0 {
+                 let fg_a = fragmentColor.a * (1.0 - cursorColorUnpacked.a);
                  let cur_a = (1.0 - fg_a);
 
-                 fgColor.a = 1.0;
-                 fgColor.r =  fgColor.r * fg_a + cursorColorUnpacked.r * cur_a;
-                 fgColor.g =  fgColor.g * fg_a + cursorColorUnpacked.g * cur_a;
-                 fgColor.b =  fgColor.b * fg_a + cursorColorUnpacked.b * cur_a;
+                 fragmentColor.a = 1.0;
+                 fragmentColor.r =  fragmentColor.r * fg_a + cursorColorUnpacked.r * cur_a;
+                 fragmentColor.g =  fragmentColor.g * fg_a + cursorColorUnpacked.g * cur_a;
+                 fragmentColor.b =  fragmentColor.b * fg_a + cursorColorUnpacked.b * cur_a;
              } else {
-                fgColor = cursorColorUnpacked;
-                fgColor.a = 1.0;
+                fragmentColor = cursorColorUnpacked;
+                fragmentColor.a = 1.0;
              }
         }
     }
 
-    return FragmentOutput(fgColor);
+    return FragmentOutput(fragmentColor);
 }

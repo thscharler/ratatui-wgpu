@@ -309,9 +309,7 @@ struct TextVertexMember {
     uv_x0: f32,
     fg_color: u32,
     underline_pos: u32,
-    underline_color: u32,
     strikeout_pos: u32,
-    strikeout_color: u32,
     cursor_pos: u32,
     cursor_color: u32,
 }

@@ -895,11 +895,7 @@ fn build_text_fg_compositor(
                 min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
             },
             count: None,
-        }
-
-
-
-        ],
+        }],
     });
 
     let fragment_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -992,7 +988,7 @@ fn build_text_fg_compositor(
             buffers: &[VertexBufferLayout {
                 array_stride: size_of::<TextVertexMember>() as u64,
                 step_mode: VertexStepMode::Vertex,
-                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Uint32, 4 => Uint32, 5 => Uint32, 6 => Uint32, 7 => Uint32, 8 => Uint32, 9 => Uint32],
+                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Uint32, 4 => Uint32, 5 => Uint32, 6 => Uint32, 7 => Uint32, ],
             }],
         },
         primitive: PrimitiveState {
