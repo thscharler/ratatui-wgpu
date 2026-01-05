@@ -145,7 +145,7 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) text_bg_compositor: TextCacheBgPipeline,
     pub(super) text_fg_compositor: TextCacheFgPipeline,
     pub(super) bg_buffer: Buffer,
-    pub(super) bg_size_buffer: Buffer,
+    pub(super) cell_size_buffer: Buffer,
     pub(super) text_screen_size_buffer: Buffer,
 
     pub(super) wgpu_state: WgpuState,
@@ -621,7 +621,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 let mut uniforms = self
                     .queue
                     .write_buffer_with(
-                        &self.bg_size_buffer,
+                        &self.cell_size_buffer,
                         0,
                         NonZeroU64::new(size_of::<[u32; 2]>() as u64).unwrap(),
                     )

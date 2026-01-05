@@ -590,8 +590,8 @@ where
             ..Default::default()
         });
 
-        let bg_size_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("BG Size buffer"),
+        let cell_size_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Cell Size buffer"),
             size: size_of::<[u32; 2]>() as u64,
             mapped_at_creation: false,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
@@ -621,7 +621,7 @@ where
             &device,
             &text_screen_size_buffer,
             &atlas_size_buffer,
-            &bg_size_buffer,
+            &cell_size_buffer,
             &bg_buffer,
             &text_mask_view,
             &sampler,
@@ -676,7 +676,7 @@ where
             text_indices: vec![],
             text_vertices: vec![],
             bg_buffer,
-            bg_size_buffer,
+            cell_size_buffer,
             text_screen_size_buffer,
             text_bg_compositor,
             text_fg_compositor,
@@ -700,7 +700,7 @@ fn build_text_bg_compositor(
     device: &Device,
     screen_size: &Buffer,
     atlas_size: &Buffer,
-    bg_size: &Buffer,
+    cell_size: &Buffer,
     bg_buffer: &Buffer,
     mask_view: &TextureView,
     sampler: &Sampler,
@@ -790,7 +790,7 @@ fn build_text_bg_compositor(
             },
             BindGroupEntry {
                 binding: 1,
-                resource: bg_size.as_entire_binding(),
+                resource: cell_size.as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 2,
@@ -895,7 +895,11 @@ fn build_text_fg_compositor(
                 min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
             },
             count: None,
-        }],
+        }
+
+
+
+        ],
     });
 
     let fragment_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
