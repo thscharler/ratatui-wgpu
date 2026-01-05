@@ -297,7 +297,7 @@ impl<'s> RenderSurface<'s> {
 struct TextBgVertexMember {
     vertex: [f32; 2],
     uv: [f32; 2],
-    bg_index: u32,
+    bg_color: u32,
 }
 
 // Vertex + UVCoord + Color
@@ -318,7 +318,6 @@ struct TextCacheBgPipeline {
     pipeline: RenderPipeline,
     fs_uniforms: BindGroup,
     atlas_bindings: BindGroup,
-    bg_bindings: BindGroup,
 }
 
 struct TextCacheFgPipeline {

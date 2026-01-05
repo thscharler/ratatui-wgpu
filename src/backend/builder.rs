@@ -590,20 +590,6 @@ where
             ..Default::default()
         });
 
-        let cell_size_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Cell Size buffer"),
-            size: size_of::<[u32; 2]>() as u64,
-            mapped_at_creation: false,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-
-        let bg_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("BG Buffer"),
-            size: (70000 * size_of::<u32>()) as u64,
-            mapped_at_creation: false,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-        });
-
         let text_screen_size_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Text Uniforms Buffer"),
             size: size_of::<[f32; 4]>() as u64,
@@ -621,8 +607,6 @@ where
             &device,
             &text_screen_size_buffer,
             &atlas_size_buffer,
-            &cell_size_buffer,
-            &bg_buffer,
             &text_mask_view,
             &sampler,
         );
@@ -675,8 +659,6 @@ where
             bg_vertices: vec![],
             text_indices: vec![],
             text_vertices: vec![],
-            bg_buffer,
-            cell_size_buffer,
             text_screen_size_buffer,
             text_bg_compositor,
             text_fg_compositor,
@@ -700,8 +682,6 @@ fn build_text_bg_compositor(
     device: &Device,
     screen_size: &Buffer,
     atlas_size: &Buffer,
-    cell_size: &Buffer,
-    bg_buffer: &Buffer,
     mask_view: &TextureView,
     sampler: &Sampler,
 ) -> TextCacheBgPipeline {
@@ -722,16 +702,6 @@ fn build_text_bg_compositor(
             },
             BindGroupLayoutEntry {
                 binding: 1,
-                visibility: ShaderStages::VERTEX_FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(size_of::<[u32; 2]>() as u64).unwrap()),
-                },
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 2,
                 visibility: ShaderStages::FRAGMENT,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
@@ -765,21 +735,6 @@ fn build_text_bg_compositor(
         ],
     });
 
-    let bg_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-        label: Some("Text Bg Compositor Color Binding Layout"),
-        entries: &[BindGroupLayoutEntry {
-            binding: 0,
-            visibility: ShaderStages::VERTEX_FRAGMENT,
-            ty: BindingType::Buffer {
-                ty: BufferBindingType::Storage { read_only: false },
-                has_dynamic_offset: false,
-                // That's the maximum number of cells ratatui can handle.
-                min_binding_size: Some(NonZeroU64::new((70000 * size_of::<u32>()) as u64).unwrap()),
-            },
-            count: None,
-        }],
-    });
-
     let fs_uniforms = device.create_bind_group(&BindGroupDescriptor {
         label: Some("Text Bg Compositor Uniforms Binding"),
         layout: &vertex_shader_layout,
@@ -790,10 +745,6 @@ fn build_text_bg_compositor(
             },
             BindGroupEntry {
                 binding: 1,
-                resource: cell_size.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 2,
                 resource: atlas_size.as_entire_binding(),
             },
         ],
@@ -814,21 +765,11 @@ fn build_text_bg_compositor(
         ],
     });
 
-    let bg_bindings = device.create_bind_group(&BindGroupDescriptor {
-        label: Some("Text Bg Compositor Color Binding"),
-        layout: &bg_shader_layout,
-        entries: &[BindGroupEntry {
-            binding: 0,
-            resource: bg_buffer.as_entire_binding(),
-        }],
-    });
-
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Text Bg Compositor Layout"),
         bind_group_layouts: &[
             &vertex_shader_layout,
             &fragment_shader_layout,
-            &bg_shader_layout,
         ],
         immediate_size: 0,
     });
@@ -870,7 +811,6 @@ fn build_text_bg_compositor(
         pipeline,
         fs_uniforms,
         atlas_bindings,
-        bg_bindings,
     }
 }
 
