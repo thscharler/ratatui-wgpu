@@ -676,6 +676,7 @@ where
             bg_vertices: vec![],
             text_indices: vec![],
             text_vertices: vec![],
+            bg_buffer,
             bg_size_buffer,
             text_screen_size_buffer,
             text_bg_compositor,

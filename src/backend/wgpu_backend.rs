@@ -144,6 +144,7 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) text_vertices: Vec<TextVertexMember>,
     pub(super) text_bg_compositor: TextCacheBgPipeline,
     pub(super) text_fg_compositor: TextCacheFgPipeline,
+    pub(super) bg_buffer: Buffer,
     pub(super) bg_size_buffer: Buffer,
     pub(super) text_screen_size_buffer: Buffer,
 
@@ -357,6 +358,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         }
         self.rendered = rendered;
 
+        self.queue.submit([]);
+
         self.render();
     }
 }
@@ -459,6 +462,9 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             };
             let [r, g, b] = bg_color;
             let bg_color_u32: u32 = u32::from_be_bytes([r, g, b, 255]);
+
+            // write bg
+            self.queue.write_buffer(&self.bg_buffer, (index * size_of::<u32>()) as u64, &bg_color_u32.to_le_bytes());
 
             let underline_pos = ((*underline_pos_min as u32 + cached.y) << 16)
                 | (*underline_pos_max as u32 + cached.y);
@@ -1137,8 +1143,11 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
             self.dirty_rows.clear();
 
+            self.queue.submit([]);
             self.render();
         }
+
+
 
         Ok(())
     }

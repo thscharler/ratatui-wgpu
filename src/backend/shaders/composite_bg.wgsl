@@ -29,7 +29,6 @@ fn vs_main(
 ) -> VertexOutput {
     let gl_Position = vec4<f32>((2.0 * VertexCoord / ScreenSize.xy - 1.0) * vec2(1.0, -1.0), 0.0, 1.0);
 
-    BgBuffer[BgIndex] = BgColor;
 
     return VertexOutput(UV, BgIndex, BgColor, gl_Position);
 }
