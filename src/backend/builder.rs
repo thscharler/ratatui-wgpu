@@ -590,9 +590,6 @@ where
             ..Default::default()
         });
 
-        let c_width = (drawable_width / self.fonts.min_width_px()) as usize;
-        let c_height = (drawable_height / self.fonts.height_px()) as usize;
-
         let bg_size_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("BG Size buffer"),
             size: size_of::<[u32; 2]>() as u64,
@@ -600,9 +597,10 @@ where
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
+        // mark
         let bg_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("BG Buffer"),
-            size: (c_width * c_height * size_of::<[f32; 4]>()) as u64,
+            size: (70000 * size_of::<u32>()) as u64,
             mapped_at_creation: false,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
@@ -623,6 +621,7 @@ where
         let text_bg_compositor = build_text_bg_compositor(
             &device,
             &text_screen_size_buffer,
+            &atlas_size_buffer,
             &bg_size_buffer,
             &bg_buffer,
             &text_mask_view,
@@ -700,6 +699,7 @@ where
 fn build_text_bg_compositor(
     device: &Device,
     screen_size: &Buffer,
+    atlas_size: &Buffer,
     bg_size: &Buffer,
     bg_buffer: &Buffer,
     mask_view: &TextureView,
@@ -730,6 +730,16 @@ fn build_text_bg_compositor(
                 },
                 count: None,
             },
+            BindGroupLayoutEntry {
+                binding: 2,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
+                },
+                count: None,
+            },
         ],
     });
 
@@ -755,6 +765,7 @@ fn build_text_bg_compositor(
         ],
     });
 
+    // mark
     let bg_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("Text Bg Compositor Color Binding Layout"),
         entries: &[BindGroupLayoutEntry {
@@ -763,10 +774,10 @@ fn build_text_bg_compositor(
             ty: BindingType::Buffer {
                 ty: BufferBindingType::Storage { read_only: false },
                 has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
+                // That's the maximum number of cells ratatui can handle.
+                min_binding_size: Some(NonZeroU64::new((70000 * size_of::<u32>()) as u64).unwrap()),
             },
-            // before we have to rebuild this all the time ...
-            count: NonZeroU32::new((80_000) as u32),
+            count: None,
         }],
     });
 
@@ -781,6 +792,10 @@ fn build_text_bg_compositor(
             BindGroupEntry {
                 binding: 1,
                 resource: bg_size.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: atlas_size.as_entire_binding(),
             },
         ],
     });
@@ -800,6 +815,7 @@ fn build_text_bg_compositor(
         ],
     });
 
+    // mark
     let bg_bindings = device.create_bind_group(&BindGroupDescriptor {
         label: Some("Text Bg Compositor Color Binding"),
         layout: &bg_shader_layout,
@@ -829,7 +845,7 @@ fn build_text_bg_compositor(
             buffers: &[VertexBufferLayout {
                 array_stride: size_of::<TextBgVertexMember>() as u64,
                 step_mode: VertexStepMode::Vertex,
-                attributes: &vertex_attr_array![0 => Float32x2, 1 => Uint32],
+                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32, 3 => Uint32],
             }],
         },
         primitive: PrimitiveState {

@@ -296,6 +296,8 @@ impl<'s> RenderSurface<'s> {
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct TextBgVertexMember {
     vertex: [f32; 2],
+    uv: [f32; 2],
+    bg_index: u32,
     bg_color: u32,
 }
 

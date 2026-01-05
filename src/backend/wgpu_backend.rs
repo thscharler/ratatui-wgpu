@@ -352,7 +352,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             .collect::<Vec<_>>();
         for index in cell_indexes {
             if let Some(to_render) = rendered.get(index) {
-                self.append_rendered(to_render, &mut index_offset);
+                self.append_rendered(to_render, index, &mut index_offset);
             }
         }
         self.rendered = rendered;
@@ -406,6 +406,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     fn append_rendered(
         &mut self,
         to_render: &Rendered,
+        index: usize,
         index_offset: &mut u32,
     ) {
         for (
@@ -511,18 +512,26 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x, y],
+                uv: [uvx, uvy],
+                bg_index: index as u32,
                 bg_color: bg_color_u32,
             });
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x + width, y],
+                uv: [uvx + width, uvy],
+                bg_index: index as u32,
                 bg_color: bg_color_u32,
             });
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x, y + height],
+                uv: [uvx, uvy + height],
+                bg_index: index as u32,
                 bg_color: bg_color_u32,
             });
             self.bg_vertices.push(TextBgVertexMember {
                 vertex: [x + width, y + height],
+                uv: [uvx + width, uvy + height],
+                bg_index: index as u32,
                 bg_color: bg_color_u32,
             });
 
@@ -1121,7 +1130,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     let index = row_index + col_index;
 
                     let to_render = &rendered[index];
-                    self.append_rendered(to_render, &mut index_offset);
+                    self.append_rendered(to_render, index, &mut index_offset);
                 }
             }
             self.rendered = rendered;
