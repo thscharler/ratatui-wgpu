@@ -28,6 +28,7 @@ fn vs_main(
     @location(9) CursorColor: u32,
 ) -> VertexOutput {
     let gl_Position = vec4<f32>((2.0 * VertexCoord / ScreenSize.xy - 1.0) * vec2(1.0, -1.0), 0.0, 1.0);
+
     return VertexOutput(UV,
         UVx0,
         FgColor,
@@ -63,7 +64,6 @@ fn unpack_color(color: u32) -> vec4<f32> {
     );
 }
 
-
 @fragment
 fn fs_main(
     @location(0) UV: vec2<f32>,
@@ -79,8 +79,8 @@ fn fs_main(
     let underLineColorUnpacked = unpack_color(UnderlineColor);
     let strikeOutColorUnpacked = unpack_color(StrikeoutColor);
     var cursorColorUnpacked = unpack_color(CursorColor);
-
     var fgColorUnpacked = unpack_color(FgColor);
+
     var textureColor = textureSample(Atlas, Sampler, UV / AtlasSize.xy);
 
     let alpha = textureColor.a * fgColorUnpacked.a;
@@ -90,6 +90,14 @@ fn fs_main(
     let mask = textureSample(Mask, Sampler, UV / AtlasSize.xy);
 
     var fgColor = select(fgColorUnpacked, textureColor, mask.r == 1.0);
+
+    let yMax = UnderlinePos & 0xFFFFu;
+    let yMin = UnderlinePos >> 16u;
+    fgColor = select(fgColor, underLineColorUnpacked, u32(UV.y) >= yMin && u32(UV.y) < yMax);
+
+    let y2Max = StrikeoutPos & 0xFFFFu;
+    let y2Min = StrikeoutPos >> 16u;
+    fgColor = select(fgColor, strikeOutColorUnpacked, u32(UV.y) >= y2Min && u32(UV.y) < y2Max);
 
     let cur_vis = CursorPos & 0x00020000u;
     let cur_hor = CursorPos & 0x00010000u;
@@ -105,23 +113,19 @@ fn fs_main(
         }
         if is_cur {
              if fgColor.a > 0.0 {
+                 let fg_a = fgColor.a * (1.0 - cursorColorUnpacked.a);
+                 let cur_a = (1.0 - fg_a);
+
                  fgColor.a = 1.0;
-                 fgColor.r =  fgColor.r * fgColor.a + cursorColorUnpacked.r;
-                 fgColor.g =  fgColor.g * fgColor.a + cursorColorUnpacked.g;
-                 fgColor.b =  fgColor.b * fgColor.a + cursorColorUnpacked.b;
+                 fgColor.r =  fgColor.r * fg_a + cursorColorUnpacked.r * cur_a;
+                 fgColor.g =  fgColor.g * fg_a + cursorColorUnpacked.g * cur_a;
+                 fgColor.b =  fgColor.b * fg_a + cursorColorUnpacked.b * cur_a;
              } else {
                 fgColor = cursorColorUnpacked;
+                fgColor.a = 1.0;
              }
         }
     }
-
-    let yMax = UnderlinePos & 0xFFFFu;
-    let yMin = UnderlinePos >> 16u;
-    fgColor = select(fgColor, underLineColorUnpacked, u32(UV.y) >= yMin && u32(UV.y) < yMax);
-
-    let y2Max = StrikeoutPos & 0xFFFFu;
-    let y2Min = StrikeoutPos >> 16u;
-    fgColor = select(fgColor, strikeOutColorUnpacked, u32(UV.y) >= y2Min && u32(UV.y) < y2Max);
 
     return FragmentOutput(fgColor);
 }

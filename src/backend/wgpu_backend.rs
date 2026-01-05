@@ -445,9 +445,9 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
             let cursor_color_u32 = if self.cursor_color != ratatui_core::style::Color::Reset {
                 let cur_color = self.colors.c2c(self.cursor_color, self.reset_fg);
-                u32::from_be_bytes([cur_color[0], cur_color[1], cur_color[2], 192])
+                u32::from_be_bytes([cur_color[0], cur_color[1], cur_color[2], 99])
             } else {
-                u32::from_be_bytes([fg_color[0], fg_color[1], fg_color[2], 192])
+                u32::from_be_bytes([fg_color[0], fg_color[1], fg_color[2], 99])
             };
 
             let bg_color = if reverse {
@@ -472,21 +472,21 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                     }
                     CursorStyle::Underscore => {
                         cursor_pos = 0x0003_0000
-                            | (*cursor_pos_max as u32 + cached.y) << 8
+                            | (*cursor_pos_max as u32 + cached.y + 1) << 8
                             | (*cursor_pos_min as u32 + cached.y);
                     }
                     CursorStyle::BoldUnderscore => {
                         cursor_pos = 0x0003_0000
-                            | (*cursor_pos_max as u32 + cached.y + 2) << 8
+                            | (*cursor_pos_max as u32 + cached.y + 3) << 8
                             | (*cursor_pos_min as u32 + cached.y);
                     }
                     CursorStyle::Bar => {
                         let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
-                        cursor_pos = 0x0002_0000 | (cursor_width) << 8 | 0x0000_0000;
+                        cursor_pos = 0x0002_0000 | (cursor_width + 1) << 8 | 0x0000_0000;
                     }
                     CursorStyle::BoldBar => {
                         let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
-                        cursor_pos = 0x0002_0000 | (cursor_width + 2) << 8 | 0x0000_0000;
+                        cursor_pos = 0x0002_0000 | (cursor_width + 3) << 8 | 0x0000_0000;
                     }
                 }
             }
