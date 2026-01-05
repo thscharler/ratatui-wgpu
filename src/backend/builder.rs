@@ -604,11 +604,8 @@ where
         });
 
         let text_bg_compositor = build_text_bg_compositor(
-            &device,
+            &device, //
             &text_screen_size_buffer,
-            &atlas_size_buffer,
-            &text_mask_view,
-            &sampler,
         );
 
         let text_fg_compositor = build_text_fg_compositor(
@@ -681,96 +678,35 @@ where
 fn build_text_bg_compositor(
     device: &Device,
     screen_size: &Buffer,
-    atlas_size: &Buffer,
-    mask_view: &TextureView,
-    sampler: &Sampler,
 ) -> TextCacheBgPipeline {
     let shader = device.create_shader_module(include_wgsl!("shaders/composite_bg.wgsl"));
 
     let vertex_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("Text Bg Compositor Uniforms Binding Layout"),
-        entries: &[
-            BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
-                },
-                count: None,
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::VERTEX,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
             },
-            BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap()),
-                },
-                count: None,
-            },
-        ],
-    });
-
-    let fragment_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-        label: Some("Text Bg Compositor Fragment Binding Layout"),
-        entries: &[
-            BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: true },
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
+            count: None,
+        }],
     });
 
     let fs_uniforms = device.create_bind_group(&BindGroupDescriptor {
         label: Some("Text Bg Compositor Uniforms Binding"),
         layout: &vertex_shader_layout,
-        entries: &[
-            BindGroupEntry {
-                binding: 0,
-                resource: screen_size.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: atlas_size.as_entire_binding(),
-            },
-        ],
-    });
-
-    let atlas_bindings = device.create_bind_group(&BindGroupDescriptor {
-        label: Some("Text Bg Compositor Fragment Binding"),
-        layout: &fragment_shader_layout,
-        entries: &[
-            BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::TextureView(mask_view),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: BindingResource::Sampler(sampler),
-            },
-        ],
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: screen_size.as_entire_binding(),
+        }],
     });
 
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Text Bg Compositor Layout"),
-        bind_group_layouts: &[
-            &vertex_shader_layout,
-            &fragment_shader_layout,
-        ],
+        bind_group_layouts: &[&vertex_shader_layout],
         immediate_size: 0,
     });
 
@@ -810,7 +746,6 @@ fn build_text_bg_compositor(
     TextCacheBgPipeline {
         pipeline,
         fs_uniforms,
-        atlas_bindings,
     }
 }
 

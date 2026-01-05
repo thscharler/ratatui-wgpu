@@ -317,7 +317,6 @@ struct TextVertexMember {
 struct TextCacheBgPipeline {
     pipeline: RenderPipeline,
     fs_uniforms: BindGroup,
-    atlas_bindings: BindGroup,
 }
 
 struct TextCacheFgPipeline {

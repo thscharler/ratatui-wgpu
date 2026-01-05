@@ -637,7 +637,6 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
                 text_render_pass.set_pipeline(&self.text_bg_compositor.pipeline);
                 text_render_pass.set_bind_group(0, &self.text_bg_compositor.fs_uniforms, &[]);
-                text_render_pass.set_bind_group(1, &self.text_bg_compositor.atlas_bindings, &[]);
                 text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
                 text_render_pass.draw_indexed(0..(self.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
 
