@@ -43,28 +43,76 @@ fn fs_main(
     let mask = textureSample(Mask, Sampler, UV / AtlasSize.xy);
 
     var fragmentColor = BgBuffer[BgIndex];
-    if mask.r >= 0.8 {
+    if mask.r >= 0.5 {
         // left
-        if BgIndex > 0u {
-            let idx = BgIndex - 1u;
-            fragmentColor = BgBuffer[idx];
-        }
-    } else if mask.r >= 0.6 {
-        // below
         var row = BgIndex / BgSize[0];
-        let col = BgIndex % BgSize[0];
-        if row + 1u < BgSize[1] {
-            row = row + 1u;
+        var col = BgIndex % BgSize[0];
+        if col > 0u {
+            col = col - 1;
         }
         let idx = row * BgSize[0] + col;
         fragmentColor = BgBuffer[idx];
-    } else if mask.r >= 0.4 {
-        // right
-        if BgIndex < BgSize[0] {
-            let idx = BgIndex + 1u;
-            fragmentColor = BgBuffer[idx];
+
+    } else if mask.r >= 0.43 {
+        // bottom left
+        var row = BgIndex / BgSize[0];
+        var col = BgIndex % BgSize[0];
+        if row < BgSize[1] {
+            row = row + 1;
         }
-    } else if mask.r >= 0.2 {
+        if col > 0 {
+            col = col - 1;
+        }
+        let idx = row * BgSize[0] + col;
+        fragmentColor = BgBuffer[idx];
+
+    } else if mask.r >= 0.37 {
+        // below
+        var row = BgIndex / BgSize[0];
+        let col = BgIndex % BgSize[0];
+        if row + 1 < BgSize[1] {
+            row = row + 1;
+        }
+        let idx = row * BgSize[0] + col;
+        fragmentColor = BgBuffer[idx];
+
+    } else if mask.r >= 0.31 {
+        // bottom right
+        var row = BgIndex / BgSize[0];
+        var col = BgIndex % BgSize[0];
+        if row < BgSize[1] {
+            row = row + 1;
+        }
+        if col < BgSize[0] {
+            col = col + 1;
+        }
+        let idx = row * BgSize[0] + col;
+        fragmentColor = BgBuffer[idx];
+
+    } else if mask.r >= 0.24 {
+        // right
+        var row = BgIndex / BgSize[0];
+        var col = BgIndex % BgSize[0];
+        if col < BgSize[0] {
+            col = col + 1;
+        }
+        let idx = row * BgSize[0] + col;
+        fragmentColor = BgBuffer[idx];
+
+    } else if mask.r >= 0.18 {
+        // top right
+        var row = BgIndex / BgSize[0];
+        var col = BgIndex % BgSize[0];
+        if row > 0u {
+            row = row - 1u;
+        }
+        if col < BgSize[0] {
+            col = col + 1u;
+        }
+        let idx = row * BgSize[0] + col;
+        fragmentColor = BgBuffer[idx];
+
+    } else if mask.r >= 0.12 {
         // above
         var row = BgIndex / BgSize[0];
         let col = BgIndex % BgSize[0];
@@ -73,6 +121,20 @@ fn fs_main(
         }
         let idx = row * BgSize[0] + col;
         fragmentColor = BgBuffer[idx];
+
+    } else if mask.r >= 0.06 {
+        // top left
+        var row = BgIndex / BgSize[0];
+        var col = BgIndex % BgSize[0];
+        if row > 0u {
+            row = row - 1u;
+        }
+        if col > 0u {
+            col = col - 1u;
+        }
+        let idx = row * BgSize[0] + col;
+        fragmentColor = BgBuffer[idx];
+
     } // else exact
 
     let fragmentColorUnpacked = unpack4x8unorm(fragmentColor);

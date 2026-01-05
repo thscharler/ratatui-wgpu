@@ -445,7 +445,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             } else {
                 self.colors.c2c(*fg, self.reset_fg)
             };
-            let fg_color_u32: u32 = u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], alpha]);
+            let fg_color_u32: u32 =
+                u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], alpha]);
 
             let cursor_color_u32 = if self.cursor_color != ratatui_core::style::Color::Reset {
                 let cur_color = self.colors.c2c(self.cursor_color, self.reset_fg);
@@ -974,9 +975,10 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         let ch = self.row[info.cluster as usize..].chars().next().unwrap();
                         let is_emoji = ch.is_emoji_char()
                             && !matches!(ch.general_category_group(), GeneralCategoryGroup::Number);
-                        let is_box_draw = ch as u32 >= 0x2500 && ch as u32 <= 0x259F;
 
-                        rasterize_glyph(
+                        let box_draw = map_box_draw(ch);
+
+                        let (cache_rect, image, colored) = rasterize_glyph(
                             cached,
                             metrics,
                             info,
@@ -985,9 +987,10 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             advance_scale,
                             self.fonts.ascender(),
                             is_emoji,
-                            is_box_draw,
                             is_fallback,
-                        )
+                        );
+
+                        (cache_rect, image, box_draw.0, box_draw.1, colored)
                     });
                 }
 
@@ -1059,7 +1062,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         }
 
         // cache glyphs
-        for (_, (cached, image, box_draw, colored)) in pending_cache_updates {
+        for (_, (cached, image, box_draw, box_draw_dir, colored)) in pending_cache_updates {
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.text_cache,
@@ -1095,7 +1098,14 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     },
                     aspect: TextureAspect::All,
                 },
-                &bg_mask(&image, cached.width, cached.height, box_draw, colored),
+                &bg_mask(
+                    &image,
+                    cached.width,
+                    cached.height,
+                    box_draw,
+                    box_draw_dir,
+                    colored,
+                ),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(cached.width),
@@ -1175,102 +1185,327 @@ fn bg_mask(
     width: u32,
     height: u32,
     box_draw: bool,
+    box_draw_dir: [BoxDirection; 4],
     color: bool,
 ) -> Vec<u8> {
     let width = width as usize;
     let height = height as usize;
 
     if color {
-        return vec![255; width * height];
+        vec![255; width * height]
     } else if !box_draw {
-        return vec![0; width * height];
+        vec![0; width * height]
     } else {
         let mut mask = vec![0; width * height];
         let mut occupied = vec![0.0f32; width * height];
 
-        // top to bottom
-        let mut scan = vec![1.0f32; width];
+        fn reduce_by(
+            d: usize,
+            scan: &mut Vec<f32>,
+        ) {
+            scan.iter_mut()
+                .for_each(|v| *v = (*v - 1.0 / d as f32).max(0.0))
+        }
+
+        let mut scan = Vec::new();
+        for d in box_draw_dir {
+            match d {
+                BoxDirection::None => {}
+                BoxDirection::TopLeft => {
+                    scan.clear();
+                    scan.resize(1, 1.0);
+                    'outer: for c in 0..width + height {
+                        let v0 = *scan.last().expect("last");
+                        scan.resize(c + 1, v0);
+
+                        let mut i = 0;
+                        let mut x = c;
+                        let mut y = 0;
+                        loop {
+                            if y < height && x < width {
+                                let idx = y * width + x;
+                                if occupied[idx] < scan[i] {
+                                    occupied[idx] = scan[i];
+                                    mask[idx] = 1 * 16;
+                                }
+                                if image[idx] > 0 {
+                                    scan[i] = 0.0;
+                                }
+                            }
+
+                            if x + 1 == width && y + 1 == height {
+                                break 'outer;
+                            }
+                            if x == 0 {
+                                break;
+                            }
+
+                            i += 1;
+                            x -= 1;
+                            y += 1;
+                        }
+                        reduce_by(width + height, &mut scan);
+                    }
+                }
+                BoxDirection::Top => {
+                    debug!("top");
+                    scan.clear();
+                    scan.resize(width, 1.0);
+                    for y in 0..height {
+                        for x in 0..width {
+                            let idx = y * width + x;
+                            if occupied[idx] < scan[x] {
+                                occupied[idx] = scan[x];
+                                mask[idx] = 2 * 16;
+                            }
+                            if image[idx] > 0 {
+                                scan[x] = 0.0;
+                            }
+                        }
+                        reduce_by(height, &mut scan);
+                    }
+                }
+                BoxDirection::TopRight => {
+                    scan.clear();
+                    scan.resize(1, 1.0);
+                    'outer: for c in 0..width + height {
+                        let v0 = *scan.last().expect("last");
+                        scan.resize(c + 1, v0);
+
+                        let mut i = 0;
+                        let mut x = c;
+                        let mut y = 0;
+                        loop {
+                            if y < height && x < width {
+                                let idx = y * width + (width - 1 - x);
+                                if occupied[idx] < scan[i] {
+                                    occupied[idx] = scan[i];
+                                    mask[idx] = 3 * 16;
+                                }
+                                if image[idx] > 0 {
+                                    scan[i] = 0.0;
+                                }
+                            }
+
+                            if x + 1 == width && y + 1 == height {
+                                break 'outer;
+                            }
+                            if x == 0 {
+                                break;
+                            }
+
+                            i += 1;
+                            x -= 1;
+                            y += 1;
+                        }
+                        reduce_by(width + height, &mut scan);
+                    }
+                }
+                BoxDirection::Right => {
+                    debug!("right");
+                    scan.clear();
+                    scan.resize(height, 1.0);
+                    for x in (0..width).rev() {
+                        for y in 0..height {
+                            let idx = y * width + x;
+                            if occupied[idx] < scan[y] {
+                                occupied[idx] = scan[y];
+                                mask[idx] = 4 * 16;
+                            }
+                            if image[idx] > 0 {
+                                scan[y] = 0.0;
+                            }
+                        }
+                        reduce_by(width, &mut scan);
+                    }
+                }
+                BoxDirection::BottomRight => {
+                    debug!("bottom right");
+                    scan.clear();
+                    scan.resize(1, 1.0);
+                    'outer: for c in 0..width + height {
+                        let v0 = *scan.last().expect("last");
+                        scan.resize(c + 1, v0);
+
+                        let mut i = 0;
+                        let mut x = c;
+                        let mut y = 0;
+                        loop {
+                            if y < height && x < width {
+                                let idx = (height - 1 - y) * width + x;
+                                if occupied[idx] < scan[i] {
+                                    occupied[idx] = scan[i];
+                                    mask[idx] = 5 * 16;
+                                }
+                                if image[idx] > 0 {
+                                    scan[i] = 0.0;
+                                }
+                            }
+
+                            if x + 1 == width && y + 1 == height {
+                                break 'outer;
+                            }
+                            if x == 0 {
+                                break;
+                            }
+
+                            i += 1;
+                            x -= 1;
+                            y += 1;
+                        }
+                        reduce_by(width + height, &mut scan);
+                    }
+                }
+                BoxDirection::Bottom => {
+                    debug!("below");
+                    scan.clear();
+                    scan.resize(width, 1.0);
+                    for y in (0..height).rev() {
+                        for x in 0..width {
+                            let idx = y * width + x;
+                            if occupied[idx] < scan[x] {
+                                occupied[idx] = scan[x];
+                                mask[idx] = 6 * 16;
+                            }
+                            if image[idx] > 0 {
+                                scan[x] = 0.0;
+                            }
+                        }
+
+                        reduce_by(height, &mut scan);
+                    }
+                }
+                BoxDirection::BottomLeft => {
+                    scan.clear();
+                    scan.resize(1, 1.0);
+                    'outer: for c in 0..width + height {
+                        let v0 = *scan.last().expect("last");
+                        scan.resize(c + 1, v0);
+
+                        let mut i = 0;
+                        let mut x = c;
+                        let mut y = 0;
+                        loop {
+                            if y < height && x < width {
+                                let idx = (height - 1 - y) * width + (width - 1 - x);
+                                if occupied[idx] < scan[i] {
+                                    occupied[idx] = scan[i];
+                                    mask[idx] = 7 * 16;
+                                }
+                                if image[idx] > 0 {
+                                    scan[i] = 0.0;
+                                }
+                            }
+
+                            if x + 1 == width && y + 1 == height {
+                                break 'outer;
+                            }
+                            if x == 0 {
+                                break;
+                            }
+
+                            i += 1;
+                            x -= 1;
+                            y += 1;
+                        }
+                        reduce_by(width + height, &mut scan);
+                    }
+                }
+                BoxDirection::Left => {
+                    // left to right
+                    scan.clear();
+                    scan.resize(height, 1.0);
+                    for x in 0..width {
+                        for y in 0..height {
+                            let idx = y * width + x;
+                            if occupied[idx] < scan[y] {
+                                occupied[idx] = scan[y];
+                                mask[idx] = 8 * 16;
+                            }
+                            if image[idx] > 0 {
+                                scan[y] = 0.0;
+                            }
+                        }
+                        reduce_by(width, &mut scan);
+                    }
+                }
+            }
+        }
+
+        use std::fmt::Write;
+        let mut buf = String::new();
         for y in 0..height {
             for x in 0..width {
-                let idx = y * width + x;
-
-                if occupied[idx] < scan[x] {
-                    occupied[idx] = scan[x];
-                    mask[idx] = 51;
-                }
-
-                if image[idx] & 0xFF == 0xFF {
-                    scan[x] = 0.0;
-                }
+                _ = write!(&mut buf, "{:01x} ", mask[y * width + x] >> 4);
             }
-
-            scan.iter_mut()
-                .for_each(|v| *v = (*v - 1.0 / height as f32).max(0.0))
+            writeln!(&mut buf);
         }
+        debug!("{}", buf);
 
-        // bottom to top
-        scan.iter_mut().for_each(|v| *v = 1.0);
-        for y in (0..height).rev() {
-            for x in 0..width {
-                let idx = y * width + x;
-
-                if occupied[idx] < scan[x] {
-                    occupied[idx] = scan[x];
-                    mask[idx] = 153;
-                }
-
-                if image[idx] & 0xFF == 0xFF {
-                    scan[x] = 0.0;
-                }
-            }
-
-            scan.iter_mut()
-                .for_each(|v| *v = (*v - 1.0 / height as f32).max(0.0))
-        }
-
-        // left to right
-        scan.resize(height, 1.0);
-        scan.iter_mut().for_each(|v| *v = 1.0);
-        for x in 0..width {
-            for y in 0..height {
-                let idx = y * width + x;
-
-                if occupied[idx] < scan[y] {
-                    occupied[idx] = scan[y];
-                    mask[idx] = 204;
-                }
-
-                if image[idx] & 0xFF == 0xFF {
-                    scan[y] = 0.0;
-                }
-            }
-
-            scan.iter_mut()
-                .for_each(|v| *v = (*v - 1.0 / width as f32).max(0.0))
-        }
-
-        // right to left
-        scan.iter_mut().for_each(|v| *v = 1.0);
-        for x in (0..width).rev() {
-            for y in 0..height {
-                let idx = y * width + x;
-
-                if occupied[idx] < scan[y] {
-                    occupied[idx] = scan[y];
-                    mask[idx] = 102;
-                }
-
-                if image[idx] & 0xFF == 0xFF {
-                    scan[y] = 0.0;
-                }
-            }
-
-            scan.iter_mut()
-                .for_each(|v| *v = (*v - 1.0 / width as f32).max(0.0))
-        }
+        // top to bottom
+        let mut scan = vec![1.0f32; width];
 
         mask
     }
+}
+
+#[repr(u8)]
+enum BoxDirection {
+    None = 0,
+    TopLeft,
+    Top,
+    TopRight,
+    Right,
+    BottomRight,
+    Bottom,
+    BottomLeft,
+    Left,
+}
+
+fn map_box_draw(ch: char) -> (bool, [BoxDirection; 4]) {
+    use BoxDirection::*;
+
+    let d = match ch as u32 {
+        0x2500..=0x2501
+        | 0x2504..=0x2505
+        | 0x2508..=0x2509
+        | 0x254C..=0x254D
+        | 0x2550
+        | 0x2574
+        | 0x2576
+        | 0x2578
+        | 0x257A
+        | 0x257C
+        | 0x257E => [Top, Bottom, None, None],
+        0x2502..=0x2503
+        | 0x2506..=0x2507
+        | 0x250A..=0x250B
+        | 0x254E..=0x254F
+        | 0x2551
+        | 0x2575
+        | 0x2577
+        | 0x2579
+        | 0x257B
+        | 0x257D
+        | 0x257F => [Left, Right, None, None],
+        0x250C..=0x250F | 0x2552..=0x2554 | 0x256D => [Top, Left, BottomRight, None],
+        0x2510..=0x2513 | 0x2555..=0x2557 | 0x256E => [Top, Right, BottomLeft, None],
+        0x2514..=0x2517 | 0x2558..=0x255A | 0x256F => [Bottom, Left, TopRight, None],
+        0x2518..=0x251B | 0x255B..=0x255D | 0x2570 => [Right, Bottom, TopLeft, None],
+        0x251C..=0x2523 | 0x255E..=0x2560 => [Left, TopRight, BottomRight, None],
+        0x2524..=0x252B | 0x2561..=0x2563 => [Right, TopLeft, BottomLeft, None],
+        0x252C..=0x2533 | 0x2564..=0x2566 => [Top, BottomRight, BottomLeft, None],
+        0x2534..=0x253B | 0x2567..=0x2569 => [Bottom, TopLeft, TopRight, None],
+        0x253C..=0x254B | 0x256A..=0x256C => [TopLeft, TopRight, BottomRight, BottomLeft],
+        0x2571 => [TopLeft, BottomRight, None, None],
+        0x2572 => [TopRight, BottomLeft, None, None],
+        0x2573 => [Top, Right, Bottom, Left],
+        _ => [None, None, None, None],
+    };
+
+    let is_box_draw = ch as u32 >= 0x2500 && ch as u32 <= 0x257F;
+
+    (is_box_draw, d)
 }
 
 fn rasterize_glyph(
@@ -1282,9 +1517,8 @@ fn rasterize_glyph(
     advance_scale: f32,
     ascender: f32,
     emoji: bool,
-    box_draw: bool,
     is_fallback: bool,
-) -> (CacheRect, Vec<u32>, bool, bool) {
+) -> (CacheRect, Vec<u32>, bool) {
     let actual_width = metrics
         .glyph_hor_advance(GlyphId(info.glyph_id as _))
         .unwrap_or_default();
@@ -1386,7 +1620,7 @@ fn rasterize_glyph(
             &DrawOptions::new(),
         );
 
-        return (*cached, image, false, false);
+        return (*cached, image, false);
     }
 
     let mut image = vec![0u32; cached.width as usize * 2 * cached.height as usize * 2];
@@ -1437,14 +1671,14 @@ fn rasterize_glyph(
             *argb = u32::from_le_bytes([r, g, b, a]);
         }
 
-        return (*cached, final_image, box_draw, true);
+        return (*cached, final_image, true);
     }
 
     if let Some(raster) = metrics.glyph_raster_image(GlyphId(info.glyph_id as _), u16::MAX) {
         if let Some((cache_rect, image)) =
             extract_color_image(&mut image, raster, cached, advance_scale)
         {
-            return (cache_rect, image, false, true);
+            return (cache_rect, image, true);
         }
     }
 
@@ -1521,7 +1755,7 @@ fn rasterize_glyph(
             },
         );
 
-        return (*cached, final_image.into_vec(), box_draw, false);
+        return (*cached, final_image.into_vec(), false);
     }
 
     if let Some(raster) = metrics.glyph_raster_image(GlyphId(info.glyph_id as _), u16::MAX) {
@@ -1529,7 +1763,7 @@ fn rasterize_glyph(
             if let Some((cached, image)) =
                 extract_bw_image(&mut image, raster, cached, advance_scale)
             {
-                return (cached, image, box_draw, false);
+                return (cached, image, false);
             }
         }
     }
@@ -1537,7 +1771,6 @@ fn rasterize_glyph(
     (
         *cached,
         vec![0u32; cached.width as usize * cached.height as usize],
-        box_draw,
         false,
     )
 }
