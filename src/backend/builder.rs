@@ -623,8 +623,8 @@ where
             (drawable_height / self.fonts.height_px()) * self.fonts.height_px(),
         );
 
-        let reset_fg = self.colors.c2c(self.reset_fg, [0, 0, 0]);
-        let reset_bg = self.colors.c2c(self.reset_bg, [255, 255, 255]);
+        let reset_fg = self.colors.c2c(self.reset_fg, [255; 3]);
+        let reset_bg = self.colors.c2c(self.reset_bg, [0; 3]);
 
         let post_process =
             self.postprocessor

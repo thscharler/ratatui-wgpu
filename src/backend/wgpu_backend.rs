@@ -174,7 +174,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         color: ratatui_core::style::Color,
     ) {
-        self.reset_fg = self.colors.c2c(color, [0; 3]);
+        self.reset_fg = self.colors.c2c(color, [255; 3]);
     }
 
     /// Set the cursor style
