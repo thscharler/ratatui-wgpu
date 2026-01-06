@@ -61,16 +61,14 @@ fn fs_main(
 ) -> FragmentOutput {
     var cursorColorUnpacked = unpack4x8unorm(CursorColor);
     var fgColorUnpacked = unpack4x8unorm(FgColor);
-
     var textureColor = textureSample(Atlas, Sampler, UV / AtlasSize.xy);
-
-    let alpha = textureColor.a * fgColorUnpacked.a;
-    textureColor.a = alpha;
-    fgColorUnpacked.a = alpha;
-
     let mask = textureSample(Mask, Sampler, UV / AtlasSize.xy);
 
-    var fragmentColor = select(fgColorUnpacked, textureColor, mask.r == 1.0);
+    var fgcolorAlpha = fgColorUnpacked;
+    let alpha = textureColor.a * fgcolorAlpha.a;
+    textureColor.a = alpha;
+    fgcolorAlpha.a = alpha;
+    var fragmentColor = select(fgcolorAlpha, textureColor, mask.r == 1.0);
 
     let yMax = UnderlinePos & 0xFFFFu;
     let yMin = UnderlinePos >> 16u;
@@ -93,18 +91,22 @@ fn fs_main(
             is_cur = u32(UV.x-UVx0) >= cur_min && u32(UV.x-UVx0) < cur_max;
         }
         if is_cur {
-             if fragmentColor.a > 0.0 {
-                 let fg_a = fragmentColor.a * (1.0 - cursorColorUnpacked.a);
-                 let cur_a = (1.0 - fg_a);
+            if fragmentColor.a > 0.0 {
+                let fg_a = fragmentColor.a * (1.0 - cursorColorUnpacked.a);
+                let cur_a = (1.0 - fg_a);
 
-                 fragmentColor.a = 1.0;
-                 fragmentColor.r =  fragmentColor.r * fg_a + cursorColorUnpacked.r * cur_a;
-                 fragmentColor.g =  fragmentColor.g * fg_a + cursorColorUnpacked.g * cur_a;
-                 fragmentColor.b =  fragmentColor.b * fg_a + cursorColorUnpacked.b * cur_a;
-             } else {
+                if any(fragmentColor.rgb != cursorColorUnpacked.rgb) {
+                    fragmentColor.a = 1.0;
+                } else {
+                    fragmentColor.a = 1.0 - fragmentColor.a;
+                }
+                fragmentColor.r =  fragmentColor.r * fg_a + cursorColorUnpacked.r * cur_a;
+                fragmentColor.g =  fragmentColor.g * fg_a + cursorColorUnpacked.g * cur_a;
+                fragmentColor.b =  fragmentColor.b * fg_a + cursorColorUnpacked.b * cur_a;
+            } else {
                 fragmentColor = cursorColorUnpacked;
                 fragmentColor.a = 1.0;
-             }
+            }
         }
     }
 

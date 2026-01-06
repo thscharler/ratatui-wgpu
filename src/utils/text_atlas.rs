@@ -65,7 +65,7 @@ impl Atlas {
         let entry_width = fonts.min_width_px() * 2;
         let entry_height = fonts.height_px();
         let max_entries = ((width / entry_width) * (height / entry_height)).max(1);
-        debug!("Atlas with WxH {entry_width}x{entry_height} can hold {max_entries}");
+        // debug!("Atlas with WxH {entry_width}x{entry_height} can hold {max_entries}");
 
         Atlas {
             lru: Lru::new(
@@ -89,10 +89,10 @@ impl Atlas {
         self.entry_height = fonts.height_px();
         self.max_entries = (self.width / self.entry_width) * (self.height / self.entry_height);
 
-        debug!(
-            "Atlas with WxH {}x{} can hold {}",
-            self.entry_width, self.entry_height, self.max_entries
-        );
+        // debug!(
+        //     "Atlas with WxH {}x{} can hold {}",
+        //     self.entry_width, self.entry_height, self.max_entries
+        // );
     }
 
     fn clear(&mut self) {

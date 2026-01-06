@@ -28,15 +28,6 @@ struct Uniforms {
 @group(0) @binding(2)
 var<uniform> uniforms: Uniforms;
 
-fn unpack_color(color: u32) -> vec4<f32> {
-    return vec4<f32>(
-        f32(color >> 24u) / 255.0,
-        f32((color >> 16u) & 0xFFu) / 255.0,
-        f32((color >> 8u) & 0xFFu) / 255.0,
-        f32(color & 0xFFu) / 255.0,
-    );
-}
-
 @fragment
 fn fs_main(@builtin(position) gl_Position: vec4<f32>) -> FragmentOutput {
     let target_size = select(vec2<f32>(textureDimensions(Texture)), uniforms.screen_size, uniforms.preserve_aspect == 0u);
@@ -44,7 +35,7 @@ fn fs_main(@builtin(position) gl_Position: vec4<f32>) -> FragmentOutput {
     let factor = select(2.2, 1.0, uniforms.use_srgb == 0u);
 
     let color = pow(textureSample(Texture, Sampler, uv), vec4(vec3(factor), 1.0));
-    let marginColor = unpack_color(uniforms.margin_color);
+    let marginColor = unpack4x8unorm(uniforms.margin_color);
 
     let out = select(color, marginColor, uv.x > 1.0 || uv.y > 1.0);
 

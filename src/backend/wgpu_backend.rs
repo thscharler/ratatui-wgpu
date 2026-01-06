@@ -654,7 +654,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         };
 
         let bg_color_u32 =
-            u32::from_be_bytes([self.reset_bg[0], self.reset_bg[1], self.reset_bg[2], 255]);
+            u32::from_le_bytes([self.reset_bg[0], self.reset_bg[1], self.reset_bg[2], 255]);
 
         self.post_process.process(
             bg_color_u32,
@@ -1191,7 +1191,7 @@ fn rasterize_glyph(
         // and later render them at the same baseline as the regular font.
 
         let mut rect_scale_x = cached.width as f32 / (actual_width as f32);
-        let mut rect_scale_y = cached.height as f32 / metrics.height() as f32;
+        let rect_scale_y = cached.height as f32 / metrics.height() as f32;
 
         if rect_scale_x / rect_scale_y > 1.0 {
             rect_scale_x = rect_scale_y;
