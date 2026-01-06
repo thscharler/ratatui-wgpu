@@ -1,8 +1,3 @@
-use std::collections::HashMap;
-use std::mem::size_of;
-use std::num::NonZeroU64;
-use std::{iter, mem};
-
 use bitvec::order::Lsb0;
 use bitvec::slice::BitSlice;
 use bitvec::vec::BitVec;
@@ -26,6 +21,11 @@ use rustybuzz::ttf_parser::RgbaColor;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::GlyphBuffer;
 use rustybuzz::UnicodeBuffer;
+use std::collections::HashMap;
+use std::mem::size_of;
+use std::num::NonZeroU64;
+use std::time::SystemTime;
+use std::{iter, mem};
 use unicode_bidi::Level;
 use unicode_bidi::ParagraphBidiInfo;
 use unicode_properties::GeneralCategoryGroup;
@@ -111,33 +111,29 @@ type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 /// - No builtin accessibilty, although [`WgpuBackend::get_text`] is provided to
 ///   access the screen's contents.
 pub struct WgpuBackend<'f, 's> {
-    pub(super) post_process: Box<dyn PostProcessor + 'static>,
-
+    // cell data
     pub(super) cells: Vec<Cell>,
     pub(super) dirty_rows: BitVec,
     pub(super) rendered: Vec<Rendered>,
     pub(super) fast_blinking: BitVec,
     pub(super) slow_blinking: BitVec,
-
-    pub(super) cursor_color: ratatui_core::style::Color,
-    pub(super) cursor_style: CursorStyle,
-    pub(super) cursor_visible: bool,
     pub(super) cursor: (u16, u16),
-    pub(super) cursor_divisor: u8,
-    pub(super) cursor_blink: bool,
 
-    pub(super) viewport: Viewport,
-
-    pub(super) surface: RenderSurface<'s>,
-    pub(super) surface_config: SurfaceConfiguration,
-    pub(super) device: Device,
-    pub(super) queue: Queue,
-
+    // temporaries
     pub(super) plan_cache: PlanCache,
     pub(super) buffer: UnicodeBuffer,
     pub(super) row: String,
     pub(super) rowmap: Vec<u16>,
 
+    // wgpu
+    pub(super) surface: RenderSurface<'s>,
+    pub(super) surface_config: SurfaceConfiguration,
+    pub(super) device: Device,
+    pub(super) queue: Queue,
+    pub(super) post_process: Box<dyn PostProcessor + 'static>,
+
+    // wgpu data
+    pub(super) wgpu_state: WgpuState,
     pub(super) cached: Atlas,
     pub(super) text_cache: Texture,
     pub(super) text_mask: Texture,
@@ -148,18 +144,25 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) text_fg_compositor: TextCacheFgPipeline,
     pub(super) text_screen_size_buffer: Buffer,
 
-    pub(super) wgpu_state: WgpuState,
-
+    // backend state flags
+    pub(super) viewport: Viewport,
     pub(super) fonts: Fonts<'f>,
     pub(super) colors: ColorTable,
     pub(super) reset_fg: Rgb,
     pub(super) reset_bg: Rgb,
 
+    pub(super) cursor_color: ratatui_core::style::Color,
+    pub(super) cursor_style: CursorStyle,
+    pub(super) cursor_visible: bool,
+    pub(super) cursor_blink: u8,
+    pub(super) cursor_divisor: u8,
+    pub(super) cursor_showing: bool,
+
     pub(super) blink: u8,
     pub(super) fast_blink_divisor: u8,
-    pub(super) fast_blink: bool,
+    pub(super) fast_blink_showing: bool,
     pub(super) slow_blink_divisor: u8,
-    pub(super) slow_blink: bool,
+    pub(super) slow_blink_showing: bool,
 }
 
 impl<'f, 's> WgpuBackend<'f, 's> {

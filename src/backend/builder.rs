@@ -631,46 +631,53 @@ where
                 .compile(&device, &wgpu_state.text_dest_view, &surface_config);
 
         Ok(WgpuBackend {
-            post_process: Box::new(post_process),
             cells: vec![],
             dirty_rows: BitVec::new(),
             rendered: vec![],
             fast_blinking: BitVec::new(),
             slow_blinking: BitVec::new(),
-            cursor_color: self.cursor_color,
-            cursor_style: self.cursor_style,
-            cursor_visible: true,
             cursor: (0, 0),
-            surface,
-            surface_config,
-            device,
-            queue,
+
             plan_cache: PlanCache::new(self.fonts.count().max(2)),
             buffer: UnicodeBuffer::new(),
             row: String::new(),
             rowmap: vec![],
-            viewport: self.viewport,
+
+            surface,
+            surface_config,
+            device,
+            queue,
+            post_process: Box::new(post_process),
+
+            wgpu_state,
             cached: Atlas::new(&self.fonts, CACHE_WIDTH, CACHE_HEIGHT),
             text_cache,
             text_mask,
             bg_vertices: vec![],
             text_indices: vec![],
             text_vertices: vec![],
-            text_screen_size_buffer,
             text_bg_compositor,
             text_fg_compositor,
-            wgpu_state,
+            text_screen_size_buffer,
+
+            viewport: self.viewport,
             fonts: self.fonts,
             colors: self.colors,
             reset_fg,
             reset_bg,
+
+            cursor_color: self.cursor_color,
+            cursor_style: self.cursor_style,
+            cursor_visible: true,
+            cursor_blink: 0,
+            cursor_divisor: self.cursor_blink,
+            cursor_showing: true,
+
             blink: 0,
             fast_blink_divisor: self.fast_blink,
-            fast_blink: true,
+            fast_blink_showing: true,
             slow_blink_divisor: self.slow_blink,
-            slow_blink: true,
-            cursor_divisor: self.cursor_blink,
-            cursor_blink: true,
+            slow_blink_showing: true,
         })
     }
 }
