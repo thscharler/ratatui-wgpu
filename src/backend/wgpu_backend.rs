@@ -332,15 +332,16 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.text_indices.clear();
 
         self.blink = self.blink.wrapping_add(1);
+        self.cursor_blink = self.cursor_blink.wrapping_add(1);
 
         if self.fast_blink_divisor != 0 && self.blink % self.fast_blink_divisor == 0 {
-            self.fast_blink = !self.fast_blink;
+            self.fast_blink_showing = !self.fast_blink_showing;
         }
         if self.slow_blink_divisor != 0 && self.blink % self.slow_blink_divisor == 0 {
-            self.slow_blink = !self.slow_blink;
+            self.slow_blink_showing = !self.slow_blink_showing;
         }
-        if self.cursor_divisor != 0 && self.blink % self.cursor_divisor == 0 {
-            self.cursor_blink = !self.cursor_blink;
+        if self.cursor_divisor != 0 && self.cursor_blink % self.cursor_divisor == 0 {
+            self.cursor_showing = !self.cursor_showing;
         }
 
         let mut index_offset = 0;
@@ -431,8 +432,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         ) in to_render.iter()
         {
             let alpha = if modifier.contains(Modifier::HIDDEN)
-                | (modifier.contains(Modifier::RAPID_BLINK) && !self.fast_blink)
-                | (modifier.contains(Modifier::SLOW_BLINK) && !self.slow_blink)
+                | (modifier.contains(Modifier::RAPID_BLINK) && !self.fast_blink_showing)
+                | (modifier.contains(Modifier::SLOW_BLINK) && !self.slow_blink_showing)
             {
                 0
             } else if modifier.contains(Modifier::DIM) {
@@ -470,7 +471,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                 | (*strikeout_pos_max as u32 + cached.y);
 
             let mut cursor_pos = 0x0000_0000;
-            if self.cursor_visible && self.cursor_blink && cursor_pos_min != cursor_pos_max {
+            if self.cursor_visible && self.cursor_showing && cursor_pos_min != cursor_pos_max {
                 match self.cursor_style {
                     CursorStyle::Block => {
                         cursor_pos = 0x0002_0000 | cached.width << 8 | 0x0000_0000;
@@ -746,6 +747,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     fn clear(&mut self) -> std::io::Result<()> {
         self.cells.clear();
         self.dirty_rows.clear();
+        self.rendered.clear();
+        self.fast_blinking.clear();
+        self.slow_blinking.clear();
         self.cursor = (0, 0);
 
         Ok(())
@@ -789,7 +793,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let bounds = self.size()?;
 
         // always show cursor on flush.
-        self.cursor_blink = true;
+        self.cursor_showing = true;
+        // reset blink, removes flickering.
+        self.cursor_blink = 0;
 
         let mut pending_cache_updates = HashMap::<_, _, RandomState>::default();
         for (y, row) in self.cells.chunks(bounds.width as usize).enumerate() {
