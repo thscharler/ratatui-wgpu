@@ -78,6 +78,8 @@ const NULL_CELL: Cell = {
     c
 };
 
+const ONE_CELL: Cell = Cell::new(" ");
+
 #[derive(Debug)]
 pub(super) struct RenderInfo {
     cached: CacheRect,
@@ -700,6 +702,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             self.slow_blinking
                 .set(index, cell.modifier.contains(Modifier::SLOW_BLINK));
 
+            for i in 1..self.cells[index].symbol().width() {
+                self.cells[index + i] = ONE_CELL;
+            }
             self.cells[index] = cell.clone();
             for i in 1..self.cells[index].symbol().width() {
                 self.cells[index + i] = NULL_CELL;
@@ -841,15 +846,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     let mut first_glyph = false;
                     if last_cell_idx != Some(cell_idx) {
                         x = cell_idx as i32 * self.fonts.min_width_px() as i32;
-
-                        if info.glyph_id == 0 {
-                            chars_wide = 1;
-                        } else {
-                            chars_wide = cell.symbol().width().max(1);
-                        }
-
+                        chars_wide = cell.symbol().width().max(1);
                         last_advance = 0;
-
                         first_glyph = true;
                     }
 
@@ -1243,15 +1241,17 @@ fn rasterize_glyph(
     };
 
     if info.glyph_id == 0 {
-        let mut image = vec![0u32; cached.width as usize * cached.height as usize];
+        let width = cached.width as usize;
+        let height = cached.height as usize;
 
-        let mut target =
-            DrawTarget::from_backing(cached.width as i32, cached.height as i32, &mut image[..]);
+        let mut image = vec![0u32; width * height];
 
-        let w1 = cached.width as f32 * 0.33;
-        let w2 = cached.width as f32 * 0.67;
-        let h1 = cached.height as f32 * 0.33;
-        let h2 = cached.height as f32 * 0.67;
+        let mut target = DrawTarget::from_backing(width as i32, height as i32, &mut image[..]);
+
+        let w1 = width as f32 * 0.33;
+        let w2 = width as f32 * 0.67;
+        let h1 = height as f32 * 0.33;
+        let h2 = height as f32 * 0.67;
 
         let mut render = Outline::default();
         render.move_to(w1, h1);
