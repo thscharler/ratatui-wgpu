@@ -1098,8 +1098,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
             let mut index_offset = 0;
             let rendered = mem::take(&mut self.rendered);
-            let rows = self.dirty_rows.iter_ones().collect::<Vec<_>>();
-            for row in rows {
+            let dirty_rows = mem::take(&mut self.dirty_rows);
+            for row in dirty_rows.iter_ones() {
                 let row_index = row * bounds.width as usize;
                 for col_index in 0..bounds.width as usize {
                     let index = row_index + col_index;
@@ -1109,8 +1109,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 }
             }
             self.rendered = rendered;
+            self.dirty_rows = dirty_rows;
 
-            self.dirty_rows.clear();
+            self.dirty_rows.iter_mut().for_each(|mut v| *v = false);
 
             self.queue.submit([]);
             self.render();
