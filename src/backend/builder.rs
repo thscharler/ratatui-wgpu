@@ -639,9 +639,10 @@ where
             cursor: (0, 0),
 
             plan_cache: PlanCache::new(self.fonts.count().max(2)),
-            buffer: UnicodeBuffer::new(),
-            row: String::new(),
-            rowmap: vec![],
+            tmp_buffer: UnicodeBuffer::new(),
+            tmp_text: String::new(),
+            tmp_text_to_cell: vec![],
+            tmp_cell_to_visible: vec![],
 
             surface,
             surface_config,

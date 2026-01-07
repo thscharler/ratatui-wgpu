@@ -24,14 +24,13 @@ use rustybuzz::UnicodeBuffer;
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::num::NonZeroU64;
-use std::time::SystemTime;
 use std::{iter, mem};
-use unicode_bidi::Level;
 use unicode_bidi::ParagraphBidiInfo;
+use unicode_bidi::{Level, LTR_LEVEL, RTL_LEVEL};
 use unicode_properties::GeneralCategoryGroup;
 use unicode_properties::UnicodeEmoji;
 use unicode_properties::UnicodeGeneralCategory;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 use wgpu::Buffer;
@@ -121,9 +120,10 @@ pub struct WgpuBackend<'f, 's> {
 
     // temporaries
     pub(super) plan_cache: PlanCache,
-    pub(super) buffer: UnicodeBuffer,
-    pub(super) row: String,
-    pub(super) rowmap: Vec<u16>,
+    pub(super) tmp_text: String,
+    pub(super) tmp_buffer: UnicodeBuffer,
+    pub(super) tmp_text_to_cell: Vec<u16>,
+    pub(super) tmp_cell_to_visible: Vec<u16>,
 
     // wgpu
     pub(super) surface: RenderSurface<'s>,
@@ -809,16 +809,21 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             // resolution, then maps bytes for the string to their associated cell index. It
             // also maps the row's cell index to the font that can source all glyphs for
             // that cell.
-            self.row.clear();
-            self.rowmap.clear();
+            self.tmp_text.clear();
+            self.tmp_text_to_cell.clear();
+            self.tmp_cell_to_visible.clear();
 
-            let mut fontmap = Vec::with_capacity(self.rowmap.capacity());
+            let mut fontmap = Vec::with_capacity(self.tmp_text_to_cell.capacity());
             for (idx, cell) in row.iter().enumerate() {
                 if !cell.skip {
-                    self.row.push_str(cell.symbol());
-                    self.rowmap
-                        .resize(self.rowmap.len() + cell.symbol().len(), idx as u16);
+                    self.tmp_text.push_str(cell.symbol());
+                    self.tmp_text_to_cell.resize(
+                        self.tmp_text_to_cell.len() + cell.symbol().len(),
+                        idx as u16,
+                    );
                 }
+                self.tmp_cell_to_visible.push(idx as u16);
+
                 fontmap.push(self.fonts.font_for_cell(cell));
             }
 
@@ -827,7 +832,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 self.rendered[row_offset + cell_idx].clear();
             }
 
-            let mut shape = |font: &Font,
+            let mut shape = |cell_to_visible: &[u16],
+                             font: &Font,
                              fake_bold,
                              fake_italic,
                              is_fallback,
@@ -845,7 +851,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     .iter()
                     .zip(buffer.glyph_positions().iter())
                 {
-                    let cell_idx = self.rowmap[info.cluster as usize] as usize;
+                    let cell_idx = self.tmp_text_to_cell[info.cluster as usize] as usize;
                     let offset = row_offset + cell_idx.min(bounds.width as usize - 1);
                     let cell = &row[cell_idx];
 
@@ -854,7 +860,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     // every glyph in the cell is positioned.
                     let mut first_glyph = false;
                     if last_cell_idx != Some(cell_idx) {
-                        x = cell_idx as i32 * self.fonts.min_width_px() as i32;
+                        x = cell_to_visible[cell_idx] as i32 * self.fonts.min_width_px() as i32;
                         chars_wide = cell.symbol().width().max(1);
                         last_advance = 0;
                         first_glyph = true;
@@ -953,7 +959,10 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     }
 
                     pending_cache_updates.entry(key).or_insert_with(|| {
-                        let ch = self.row[info.cluster as usize..].chars().next().unwrap();
+                        let ch = self.tmp_text[info.cluster as usize..]
+                            .chars()
+                            .next()
+                            .unwrap();
                         let is_emoji = ch.is_emoji_char()
                             && !matches!(ch.general_category_group(), GeneralCategoryGroup::Number);
 
@@ -977,7 +986,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             };
 
             // run text shaping
-            let bidi = ParagraphBidiInfo::new(&self.row, None);
+            let bidi = ParagraphBidiInfo::new(&self.tmp_text, None);
             let (levels, runs) = bidi.visual_runs(0..bidi.levels.len());
 
             let (
@@ -987,23 +996,37 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 mut current_is_fallback,
             ) = fontmap[0];
             let mut current_level = Level::ltr();
+            let mut current_cell_idx = 0;
+            let mut reset_cell_idx = 0;
 
             for (level, range) in runs.into_iter().map(|run| (levels[run.start], run)) {
-                let chars = &self.row[range.clone()];
-                let cells = &self.rowmap[range.clone()];
+                debug!(
+                    "runs {:?} {:?} {:?} {:?}",
+                    level,
+                    range,
+                    &self.tmp_text[range.clone()],
+                    &self.tmp_text_to_cell[range.clone()]
+                );
+
+                let chars = &self.tmp_text[range.clone()];
+                let cells = &self.tmp_text_to_cell[range.clone()];
+                let min_cell_idx = *cells.first().expect("first") as usize;
+                let max_cell_idx = *cells.last().expect("last") as usize;
+
                 for (idx, ch) in chars.char_indices() {
                     let cell_idx = cells[idx] as usize;
-                    let (font, fake_bold, fake_italic, is_fallback) = fontmap[cell_idx];
 
+                    let (font, fake_bold, fake_italic, is_fallback) = fontmap[cell_idx];
                     if font.id() != current_font.id()
                         || current_fake_bold != fake_bold
                         || current_fake_italic != fake_italic
                         || current_is_fallback != is_fallback
                         || current_level != level
                     {
-                        let mut buffer = mem::take(&mut self.buffer);
+                        let mut buffer = mem::take(&mut self.tmp_buffer);
 
-                        self.buffer = shape(
+                        self.tmp_buffer = shape(
+                            &self.tmp_cell_to_visible,
                             current_font,
                             current_fake_bold,
                             current_fake_italic,
@@ -1014,20 +1037,42 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                                 buffer,
                             ),
                         );
-
-                        current_font = font;
-                        current_fake_bold = fake_bold;
-                        current_fake_italic = fake_italic;
-                        current_is_fallback = is_fallback;
-                        current_level = level;
                     }
 
-                    self.buffer.add(ch, (range.start + idx) as u32);
+                    if current_level.is_ltr() != level.is_ltr() {
+                        debug!("switch level {:?} -> {:?}", current_level, level);
+                        if level.is_rtl() {
+                            current_cell_idx += (max_cell_idx - min_cell_idx) as u16;
+                            reset_cell_idx = max_cell_idx as u16;
+                            debug!("switch LTR->RTL {}", current_cell_idx);
+                        } else {
+                            current_cell_idx = reset_cell_idx;
+                            debug!("switch RTL->LTR {}", current_cell_idx);
+                        }
+                    }
+                    if level.is_ltr() {
+                        debug!("LTR {}", current_cell_idx);
+                        self.tmp_cell_to_visible[cell_idx] = current_cell_idx;
+                        current_cell_idx += ch.width().unwrap_or(1) as u16;
+                    } else {
+                        debug!("RTL {}", current_cell_idx);
+                        self.tmp_cell_to_visible[cell_idx] = current_cell_idx;
+                        current_cell_idx -= ch.width().unwrap_or(1) as u16;
+                    }
+
+                    self.tmp_buffer.add(ch, (range.start + idx) as u32);
+
+                    current_font = font;
+                    current_fake_bold = fake_bold;
+                    current_fake_italic = fake_italic;
+                    current_is_fallback = is_fallback;
+                    current_level = level;
                 }
             }
 
-            let mut buffer = mem::take(&mut self.buffer);
-            self.buffer = shape(
+            let mut buffer = mem::take(&mut self.tmp_buffer);
+            self.tmp_buffer = shape(
+                &self.tmp_cell_to_visible,
                 current_font,
                 current_fake_bold,
                 current_fake_italic,
