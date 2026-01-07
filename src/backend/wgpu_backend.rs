@@ -117,6 +117,7 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) fast_blinking: BitVec,
     pub(super) slow_blinking: BitVec,
     pub(super) cursor: (u16, u16),
+    pub(super) cursor_view: (u16, u16),
 
     // temporaries
     pub(super) plan_cache: PlanCache,
@@ -352,7 +353,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             .iter_ones()
             .chain(self.slow_blinking.iter_ones())
             .chain(iter::once(
-                self.cursor.1 as usize * bounds.width as usize + self.cursor.0 as usize,
+                self.cursor_view.1 as usize * bounds.width as usize + self.cursor_view.0 as usize,
             ))
             .collect::<Vec<_>>();
         for index in cell_indexes {
@@ -494,6 +495,18 @@ impl<'f, 's> WgpuBackend<'f, 's> {
                     CursorStyle::BoldBar => {
                         let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
                         cursor_pos = 0x0002_0000 | (cursor_width + 3) << 8 | 0x0000_0000;
+                    }
+                    CursorStyle::RtlBar => {
+                        let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
+                        cursor_pos = 0x0002_0000
+                            | cached.width << 8
+                            | (cached.width.saturating_sub(cursor_width + 1));
+                    }
+                    CursorStyle::RtlBoldBar => {
+                        let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
+                        cursor_pos = 0x0002_0000
+                            | cached.width << 8
+                            | (cached.width.saturating_sub(cursor_width + 3))
                     }
                 }
             }
@@ -741,6 +754,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let bounds = self.size()?;
         let pos: Position = position.into();
         self.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
+        self.cursor_view = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1)); // TODO
+        self.dirty_rows.set(self.cursor.1 as usize, true);
         Ok(())
     }
 
@@ -751,6 +766,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         self.fast_blinking.clear();
         self.slow_blinking.clear();
         self.cursor = (0, 0);
+        self.cursor_view = (0, 0);
 
         Ok(())
     }
@@ -833,6 +849,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             }
 
             let mut shape = |cell_to_visible: &[u16],
+                             vis_cursor: (u16, u16),
                              font: &Font,
                              fake_bold,
                              fake_italic,
@@ -1000,14 +1017,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             let mut reset_cell_idx = 0;
 
             for (level, range) in runs.into_iter().map(|run| (levels[run.start], run)) {
-                debug!(
-                    "runs {:?} {:?} {:?} {:?}",
-                    level,
-                    range,
-                    &self.tmp_text[range.clone()],
-                    &self.tmp_text_to_cell[range.clone()]
-                );
-
                 let chars = &self.tmp_text[range.clone()];
                 let cells = &self.tmp_text_to_cell[range.clone()];
                 let min_cell_idx = *cells.first().expect("first") as usize;
@@ -1027,6 +1036,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                         self.tmp_buffer = shape(
                             &self.tmp_cell_to_visible,
+                            self.cursor_view,
                             current_font,
                             current_fake_bold,
                             current_fake_italic,
@@ -1048,12 +1058,25 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             current_cell_idx = reset_cell_idx;
                         }
                     }
+
                     if level.is_ltr() {
+                        if (cell_idx as u16, y as u16) == self.cursor {
+                            self.cursor_view = (current_cell_idx, y as u16);
+                            self.cursor_style = self.cursor_style.to_ltr();
+                        }
+
                         self.tmp_cell_to_visible[cell_idx] = current_cell_idx;
                         current_cell_idx += ch.width().unwrap_or(1) as u16;
                     } else {
+                        if (cell_idx as u16, y as u16) == self.cursor {
+                            self.cursor_view = (current_cell_idx, y as u16);
+                            self.cursor_style = self.cursor_style.to_rtl();
+                        }
+
                         self.tmp_cell_to_visible[cell_idx] = current_cell_idx;
-                        current_cell_idx -= ch.width().unwrap_or(1) as u16;
+                        if current_cell_idx > 0 {
+                            current_cell_idx -= ch.width().unwrap_or(1) as u16;
+                        }
                     }
 
                     self.tmp_buffer.add(ch, (range.start + idx) as u32);
@@ -1069,6 +1092,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             let mut buffer = mem::take(&mut self.tmp_buffer);
             self.tmp_buffer = shape(
                 &self.tmp_cell_to_visible,
+                self.cursor_view,
                 current_font,
                 current_fake_bold,
                 current_fake_italic,

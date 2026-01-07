@@ -637,7 +637,8 @@ where
             fast_blinking: BitVec::new(),
             slow_blinking: BitVec::new(),
             cursor: (0, 0),
-
+            cursor_view: (0, 0),
+            
             plan_cache: PlanCache::new(self.fonts.count().max(2)),
             tmp_buffer: UnicodeBuffer::new(),
             tmp_text: String::new(),

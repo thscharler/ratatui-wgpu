@@ -164,14 +164,33 @@ type RandomState = std::hash::RandomState;
 
 /// Cursor-styles.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum CursorStyle
-{
+pub enum CursorStyle {
     Block,
     Underscore,
     BoldUnderscore,
     #[default]
     Bar,
-    BoldBar
+    BoldBar,
+    RtlBar,
+    RtlBoldBar,
+}
+
+impl CursorStyle {
+    pub(crate) fn to_ltr(self) -> CursorStyle {
+        match self {
+            CursorStyle::RtlBar => CursorStyle::Bar,
+            CursorStyle::RtlBoldBar => CursorStyle::RtlBoldBar,
+            v => v,
+        }
+    }
+
+    pub(crate) fn to_rtl(self) -> CursorStyle {
+        match self {
+            CursorStyle::Bar => CursorStyle::RtlBar,
+            CursorStyle::BoldBar => CursorStyle::RtlBoldBar,
+            v => v,
+        }
+    }
 }
 
 pub use backend::builder::Builder;
