@@ -1039,23 +1039,19 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         );
                     }
 
+                    // remap cells according to bidi remapping.
                     if current_level.is_ltr() != level.is_ltr() {
-                        debug!("switch level {:?} -> {:?}", current_level, level);
                         if level.is_rtl() {
                             current_cell_idx += (max_cell_idx - min_cell_idx) as u16;
-                            reset_cell_idx = max_cell_idx as u16;
-                            debug!("switch LTR->RTL {}", current_cell_idx);
+                            reset_cell_idx = current_cell_idx + 1;
                         } else {
                             current_cell_idx = reset_cell_idx;
-                            debug!("switch RTL->LTR {}", current_cell_idx);
                         }
                     }
                     if level.is_ltr() {
-                        debug!("LTR {}", current_cell_idx);
                         self.tmp_cell_to_visible[cell_idx] = current_cell_idx;
                         current_cell_idx += ch.width().unwrap_or(1) as u16;
                     } else {
-                        debug!("RTL {}", current_cell_idx);
                         self.tmp_cell_to_visible[cell_idx] = current_cell_idx;
                         current_cell_idx -= ch.width().unwrap_or(1) as u16;
                     }
