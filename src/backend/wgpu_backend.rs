@@ -245,7 +245,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
         self.wgpu_base.surface_config.width = width;
         self.wgpu_base.surface_config.height = height;
-        self.rebuild_surface();
+
+        rebuild_surface(
+            &mut self.state,
+            &mut self.rendered,
+            &mut self.wgpu_base,
+            self.wgpu_post_process.as_mut(),
+        );
     }
 
     /// Get the text currently displayed on the screen.
@@ -285,7 +291,12 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.wgpu_atlas.cached.match_fonts(&new_fonts);
         self.state.fonts = new_fonts;
 
-        self.rebuild_surface();
+        rebuild_surface(
+            &mut self.state,
+            &mut self.rendered,
+            &mut self.wgpu_base,
+            self.wgpu_post_process.as_mut(),
+        );
     }
 
     /// Replace the fonts used for rendering. This will keep the fallback fonts.
@@ -302,7 +313,12 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.state.dirty_rows.clear();
         self.wgpu_atlas.cached.match_fonts(&self.state.fonts);
 
-        self.rebuild_surface();
+        rebuild_surface(
+            &mut self.state,
+            &mut self.rendered,
+            &mut self.wgpu_base,
+            self.wgpu_post_process.as_mut(),
+        );
     }
 
     /// Update the font-size used for rendering. This will cause a full repaint of
@@ -315,7 +331,12 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.state.fonts.set_size_px(new_font_size);
         self.wgpu_atlas.cached.match_fonts(&self.state.fonts);
 
-        self.rebuild_surface();
+        rebuild_surface(
+            &mut self.state,
+            &mut self.rendered,
+            &mut self.wgpu_base,
+            self.wgpu_post_process.as_mut(),
+        );
     }
 
     /// Toggle blink.
@@ -382,50 +403,54 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     }
 }
 
-impl<'f, 's> WgpuBackend<'f, 's> {
-    /// Resize the rendering surface. This should be called e.g. to keep the
-    /// backend in sync with your window size.
-    fn rebuild_surface(&mut self) {
-        let (inset_width, inset_height) = match self.state.viewport {
-            Viewport::Full => (0, 0),
-            Viewport::Shrink { width, height } => (width, height),
-        };
+/// Resize the rendering surface. This should be called e.g. to keep the
+/// backend in sync with your window size.
+fn rebuild_surface(
+    state: &mut BackendState,
+    rendered: &mut Vec<Rendered>,
+    wgpu_base: &mut WgpuBase,
+    wgpu_post_process: &mut dyn PostProcessor,
+) {
+    let (inset_width, inset_height) = match state.viewport {
+        Viewport::Full => (0, 0),
+        Viewport::Shrink { width, height } => (width, height),
+    };
 
-        let width = self.wgpu_base.surface_config.width;
-        let height = self.wgpu_base.surface_config.height;
-        self.wgpu_base
-            .surface
-            .configure(&self.wgpu_base.device, &self.wgpu_base.surface_config);
+    let width = wgpu_base.surface_config.width;
+    let height = wgpu_base.surface_config.height;
+    wgpu_base
+        .surface
+        .configure(&wgpu_base.device, &wgpu_base.surface_config);
 
-        let width = width - inset_width;
-        let height = height - inset_height;
+    let width = width - inset_width;
+    let height = height - inset_height;
+    let font_box = state.fonts.font_box();
 
-        let chars_wide = width / self.state.fonts.min_width_px();
-        let chars_high = height / self.state.fonts.height_px();
+    let chars_wide = width / font_box.width;
+    let chars_high = height / font_box.height;
 
-        self.state.cells.clear();
-        self.state.cell_remap.clear();
-        self.rendered.clear();
-        self.state.fast_blinking.clear();
-        self.state.slow_blinking.clear();
+    state.cells.clear();
+    state.cell_remap.clear();
+    state.fast_blinking.clear();
+    state.slow_blinking.clear();
+    // This always needs to be cleared because the surface is cleared when it is
+    // resized. If we don't re-render the rows, we end up with a blank surface when
+    // the resize is less than a character dimension.
+    state.dirty_rows.clear();
 
-        // This always needs to be cleared because the surface is cleared when it is
-        // resized. If we don't re-render the rows, we end up with a blank surface when
-        // the resize is less than a character dimension.
-        self.state.dirty_rows.clear();
+    rendered.clear();
 
-        self.wgpu_base.text_dest_view = build_wgpu_state(
-            &self.wgpu_base.device,
-            chars_wide * self.state.fonts.min_width_px(),
-            chars_high * self.state.fonts.height_px(),
-        );
+    wgpu_base.text_dest_view = build_wgpu_state(
+        &wgpu_base.device,
+        chars_wide * font_box.width,
+        chars_high * font_box.height,
+    );
 
-        self.wgpu_post_process.resize(
-            &self.wgpu_base.device,
-            &self.wgpu_base.text_dest_view,
-            &self.wgpu_base.surface_config,
-        );
-    }
+    wgpu_post_process.resize(
+        &wgpu_base.device,
+        &wgpu_base.text_dest_view,
+        &wgpu_base.surface_config,
+    );
 }
 
 fn append_rendered(
