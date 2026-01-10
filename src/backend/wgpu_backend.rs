@@ -139,9 +139,9 @@ pub struct WgpuBackend<'f, 's> {
 
     // temporaries for shaping
     pub(super) plan_cache: PlanCache,
-    pub(super) tmp_text: String,
+    pub(super) tmp_rowbuf: String,
+    pub(super) tmp_rowbuf_to_cell: Vec<u16>,
     pub(super) tmp_buffer: UnicodeBuffer,
-    pub(super) tmp_text_to_cell: Vec<u16>,
 
     // wgpu input
     pub(super) wgpu_base: WgpuBase<'s>,
@@ -870,7 +870,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         // reset blink, removes flickering.
         self.state.cursor_blink = 0;
 
-        let mut pending_cache_updates = HashMap::<_, _, RandomState>::default();
         for (y, row) in self.state.cells.chunks(bounds.width as usize).enumerate() {
             if !self.state.dirty_rows[y] {
                 continue;
@@ -882,15 +881,15 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             // resolution, then maps bytes for the string to their associated cell index. It
             // also maps the row's cell index to the font that can source all glyphs for
             // that cell.
-            self.tmp_text.clear();
-            self.tmp_text_to_cell.clear();
+            self.tmp_rowbuf.clear();
+            self.tmp_rowbuf_to_cell.clear();
 
-            let mut fontmap = Vec::with_capacity(self.tmp_text_to_cell.capacity());
+            let mut fontmap = Vec::with_capacity(self.tmp_rowbuf_to_cell.capacity());
             for (idx, cell) in row.iter().enumerate() {
                 if !cell.skip {
-                    self.tmp_text.push_str(cell.symbol());
-                    self.tmp_text_to_cell.resize(
-                        self.tmp_text_to_cell.len() + cell.symbol().len(),
+                    self.tmp_rowbuf.push_str(cell.symbol());
+                    self.tmp_rowbuf_to_cell.resize(
+                        self.tmp_rowbuf_to_cell.len() + cell.symbol().len(),
                         idx as u16,
                     );
                 }
@@ -905,162 +904,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 self.rendered[row_offset + cell_idx].clear();
             }
 
-            let mut shape = |cell_remap: &[u16],
-                             font: &Font,
-                             fake_bold,
-                             fake_italic,
-                             is_fallback,
-                             buffer: GlyphBuffer|
-             -> UnicodeBuffer {
-                let metrics = font.font();
-                let advance_scale = self.state.fonts.scale();
-
-                let mut x = 0;
-                let mut chars_wide = 1;
-                let mut last_cell_idx: Option<usize> = None;
-                let mut last_advance = 0;
-                for (info, position) in buffer
-                    .glyph_infos()
-                    .iter()
-                    .zip(buffer.glyph_positions().iter())
-                {
-                    let cell_idx = self.tmp_text_to_cell[info.cluster as usize] as usize;
-                    let offset = row_offset + cell_idx.min(bounds.width as usize - 1);
-                    let cell = &row[cell_idx];
-
-                    // Every cell has it's defined position on the grid.
-                    // This position is used as a starting point from which
-                    // every glyph in the cell is positioned.
-                    let mut first_glyph = false;
-                    if last_cell_idx != Some(cell_idx) {
-                        x = cell_remap[row_offset + cell_idx] as i32
-                            * self.state.fonts.min_width_px() as i32;
-                        chars_wide = cell.symbol().width().max(1);
-                        last_advance = 0;
-                        first_glyph = true;
-                    }
-
-                    // if we have a combining '.undef' skip it completely.
-                    if last_cell_idx == Some(cell_idx) {
-                        if info.glyph_id == 0 {
-                            continue;
-                        }
-                    }
-
-                    last_cell_idx = Some(cell_idx);
-
-                    let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
-                    let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
-
-                    let basey = y as i32 * self.state.fonts.height_px() as i32
-                        + (position.y_offset as f32 * advance_scale) as i32;
-
-                    let mut basex = x + glyph_offset;
-                    // special case: combining glyphs with offset == 0 && advance == 0
-                    if glyph_advance == 0 && glyph_offset == 0 {
-                        basex -= last_advance;
-                    }
-                    if glyph_advance > 0 {
-                        last_advance = glyph_advance;
-                    }
-
-                    // advance
-                    x += glyph_advance;
-
-                    // This assumes that we only want to underline the first character in the
-                    // cluster, and that the remaining characters are all combining characters
-                    // which don't need an underline.
-                    let limit_modifiers = if first_glyph {
-                        Modifier::BOLD
-                            | Modifier::ITALIC
-                            | Modifier::UNDERLINED
-                            | Modifier::CROSSED_OUT
-                    } else {
-                        Modifier::BOLD | Modifier::ITALIC
-                    };
-
-                    let key = Key {
-                        style: cell.modifier.intersection(limit_modifiers),
-                        glyph: info.glyph_id,
-                        width: chars_wide as u8,
-                        font: font.id(),
-                    };
-
-                    let cached = self.wgpu_atlas.cached.get(
-                        &key,
-                        chars_wide as u32 * self.state.fonts.min_width_px(),
-                        self.state.fonts.height_px(),
-                    );
-
-                    let cursor_pos = if first_glyph
-                        && self.state.cursor_visible
-                        && (cell_idx as u16, y as u16) == self.state.cursor
-                    {
-                        font.underline(self.state.fonts.height_px(), cached.height)
-                    } else {
-                        (0, 0)
-                    };
-
-                    let underline_pos = if key.style.contains(Modifier::UNDERLINED) {
-                        font.underline(self.state.fonts.height_px(), cached.height)
-                    } else {
-                        (0, 0)
-                    };
-                    let strikeout_pos = if key.style.contains(Modifier::CROSSED_OUT) {
-                        font.strikeout(self.state.fonts.height_px(), cached.height)
-                    } else {
-                        (0, 0)
-                    };
-
-                    self.rendered[offset].insert(
-                        (basex, basey, GlyphId(info.glyph_id as _)),
-                        RenderInfo {
-                            cached: *cached,
-                            fg: cell.fg,
-                            bg: cell.bg,
-                            modifier: cell.modifier,
-                            underline_pos_min: underline_pos.0 as u16,
-                            underline_pos_max: underline_pos.1 as u16,
-                            strikeout_pos_min: strikeout_pos.0 as u16,
-                            strikeout_pos_max: strikeout_pos.1 as u16,
-                            cursor_pos_min: cursor_pos.0 as u16,
-                            cursor_pos_max: cursor_pos.1 as u16,
-                        },
-                    );
-
-                    if cached.cached() {
-                        continue;
-                    }
-
-                    pending_cache_updates.entry(key).or_insert_with(|| {
-                        let ch = self.tmp_text[info.cluster as usize..]
-                            .chars()
-                            .next()
-                            .unwrap();
-                        let is_emoji = ch.is_emoji_char()
-                            && !matches!(ch.general_category_group(), GeneralCategoryGroup::Number);
-
-                        let (cache_rect, image, colored) = rasterize_glyph(
-                            cached,
-                            metrics,
-                            info,
-                            fake_italic & !is_emoji,
-                            fake_bold,
-                            advance_scale,
-                            self.state.fonts.ascender(),
-                            is_emoji,
-                            is_fallback,
-                        );
-
-                        (cache_rect, image, colored)
-                    });
-                }
-
-                buffer.clear()
-            };
-
             // run text shaping
-            let bidi = ParagraphBidiInfo::new(&self.tmp_text, None);
+            let bidi = ParagraphBidiInfo::new(&self.tmp_rowbuf, None);
             let (levels, runs) = bidi.visual_runs(0..bidi.levels.len());
 
             let (
@@ -1072,8 +917,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             let mut current_level = Level::ltr();
 
             for (level, range) in runs.into_iter().map(|run| (levels[run.start], run)) {
-                let chars = &self.tmp_text[range.clone()];
-                let cells = &self.tmp_text_to_cell[range.clone()];
+                let chars = &self.tmp_rowbuf[range.clone()];
+                let cells = &self.tmp_rowbuf_to_cell[range.clone()];
                 let min_cell_idx = *cells.first().expect("first") as usize;
                 let max_cell_idx = *cells.last().expect("last") as usize;
 
@@ -1090,16 +935,26 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         let mut buffer = mem::take(&mut self.tmp_buffer);
 
                         self.tmp_buffer = shape(
+                            &self.wgpu_base,
+                            bounds,
+                            y,
+                            row,
                             &self.state.cell_remap,
-                            current_font,
-                            current_fake_bold,
-                            current_fake_italic,
-                            current_is_fallback,
+                            &self.tmp_rowbuf_to_cell,
                             shape_with_plan(
                                 current_font.font(),
                                 self.plan_cache.get(current_font, &mut buffer),
                                 buffer,
                             ),
+                            self.state.fonts.font_box(),
+                            current_font,
+                            current_fake_bold,
+                            current_fake_italic,
+                            current_is_fallback,
+                            self.state.cursor_visible,
+                            self.state.cursor,
+                            &mut self.rendered,
+                            &mut self.wgpu_atlas,
                         );
                     }
 
@@ -1112,6 +967,10 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         }
 
                         self.state.cell_remap[row_offset + cell_idx] = view_idx;
+                    } else {
+                        if (cell_idx as u16, y as u16) == self.state.cursor {
+                            self.state.cursor_style = self.state.cursor_style.to_ltr();
+                        }
                     }
 
                     self.tmp_buffer.add(ch, (range.start + idx) as u32);
@@ -1126,68 +985,27 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
             let mut buffer = mem::take(&mut self.tmp_buffer);
             self.tmp_buffer = shape(
+                &self.wgpu_base,
+                bounds,
+                y,
+                row,
                 &self.state.cell_remap,
-                current_font,
-                current_fake_bold,
-                current_fake_italic,
-                current_is_fallback,
+                &self.tmp_rowbuf_to_cell,
                 shape_with_plan(
                     current_font.font(),
                     self.plan_cache.get(current_font, &mut buffer),
                     buffer,
                 ),
+                self.state.fonts.font_box(),
+                current_font,
+                current_fake_bold,
+                current_fake_italic,
+                current_is_fallback,
+                self.state.cursor_visible,
+                self.state.cursor,
+                &mut self.rendered,
+                &mut self.wgpu_atlas,
             );
-        }
-
-        // cache glyphs
-        for (_, (cached, image, colored)) in pending_cache_updates {
-            self.wgpu_base.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.wgpu_atlas.text_cache,
-                    mip_level: 0,
-                    origin: Origin3d {
-                        x: cached.x,
-                        y: cached.y,
-                        z: 0,
-                    },
-                    aspect: TextureAspect::All,
-                },
-                bytemuck::cast_slice(&image),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(cached.width * size_of::<u32>() as u32),
-                    rows_per_image: Some(cached.height),
-                },
-                Extent3d {
-                    width: cached.width,
-                    height: cached.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-
-            self.wgpu_base.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.wgpu_atlas.text_mask,
-                    mip_level: 0,
-                    origin: Origin3d {
-                        x: cached.x,
-                        y: cached.y,
-                        z: 0,
-                    },
-                    aspect: TextureAspect::All,
-                },
-                &bg_mask(cached.width, cached.height, colored),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(cached.width),
-                    rows_per_image: Some(cached.height),
-                },
-                Extent3d {
-                    width: cached.width,
-                    height: cached.height,
-                    depth_or_array_layers: 1,
-                },
-            )
         }
 
         if self.wgpu_post_process.needs_update() || self.state.dirty_rows.any() {
@@ -1263,6 +1081,205 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     }
 
     type Error = std::io::Error;
+}
+
+fn shape(
+    wgpu_base: &WgpuBase,
+    bounds: Size,
+    y: usize,
+    row: &[Cell],
+    cell_remap: &[u16],
+    buf_to_cell: &[u16],
+    buffer: GlyphBuffer,
+    font_box: FontBox,
+    font: &Font,
+    fake_bold: bool,
+    fake_italic: bool,
+    is_fallback: bool,
+    cursor_visible: bool,
+    cursor: (u16, u16),
+    rendered: &mut Vec<Rendered>,
+    wgpu_atlas: &mut WgpuAtlas,
+) -> UnicodeBuffer {
+    let row_offset = y.min(bounds.height as usize - 1) * bounds.width as usize;
+    let metrics = font.font();
+    let advance_scale = font_box.scale;
+
+    let mut x = 0;
+    let mut chars_wide = 1;
+    let mut last_cell_idx: Option<usize> = None;
+    let mut last_advance = 0;
+    for (info, position) in buffer
+        .glyph_infos()
+        .iter()
+        .zip(buffer.glyph_positions().iter())
+    {
+        let cell_idx = buf_to_cell[info.cluster as usize] as usize;
+        let offset = row_offset + cell_idx.min(bounds.width as usize - 1);
+        let cell = &row[cell_idx];
+
+        // Every cell has it's defined position on the grid.
+        // This position is used as a starting point from which
+        // every glyph in the cell is positioned.
+        let mut first_glyph = false;
+        if last_cell_idx != Some(cell_idx) {
+            x = cell_remap[row_offset + cell_idx] as i32 * font_box.width as i32;
+            chars_wide = cell.symbol().width().max(1);
+            last_advance = 0;
+            first_glyph = true;
+        }
+
+        // if we have a combining '.undef' skip it completely.
+        if last_cell_idx == Some(cell_idx) {
+            if info.glyph_id == 0 {
+                continue;
+            }
+        }
+
+        last_cell_idx = Some(cell_idx);
+
+        let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
+        let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
+
+        let basey =
+            y as i32 * font_box.height as i32 + (position.y_offset as f32 * advance_scale) as i32;
+
+        let mut basex = x + glyph_offset;
+        // special case: combining glyphs with offset == 0 && advance == 0
+        if glyph_advance == 0 && glyph_offset == 0 {
+            basex -= last_advance;
+        }
+        if glyph_advance > 0 {
+            last_advance = glyph_advance;
+        }
+
+        // advance
+        x += glyph_advance;
+
+        // This assumes that we only want to underline the first character in the
+        // cluster, and that the remaining characters are all combining characters
+        // which don't need an underline.
+        let limit_modifiers = if first_glyph {
+            Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED | Modifier::CROSSED_OUT
+        } else {
+            Modifier::BOLD | Modifier::ITALIC
+        };
+
+        let key = Key {
+            style: cell.modifier.intersection(limit_modifiers),
+            glyph: info.glyph_id,
+            width: chars_wide as u8,
+            font: font.id(),
+        };
+
+        let cached =
+            wgpu_atlas
+                .cached
+                .get(&key, chars_wide as u32 * font_box.width, font_box.height);
+
+        let cursor_pos = if first_glyph && cursor_visible && (cell_idx as u16, y as u16) == cursor {
+            font.underline(font_box.height, cached.height)
+        } else {
+            (0, 0)
+        };
+
+        let underline_pos = if key.style.contains(Modifier::UNDERLINED) {
+            font.underline(font_box.height, cached.height)
+        } else {
+            (0, 0)
+        };
+        let strikeout_pos = if key.style.contains(Modifier::CROSSED_OUT) {
+            font.strikeout(font_box.height, cached.height)
+        } else {
+            (0, 0)
+        };
+
+        rendered[offset].insert(
+            (basex, basey, GlyphId(info.glyph_id as _)),
+            RenderInfo {
+                cached: *cached,
+                fg: cell.fg,
+                bg: cell.bg,
+                modifier: cell.modifier,
+                underline_pos_min: underline_pos.0 as u16,
+                underline_pos_max: underline_pos.1 as u16,
+                strikeout_pos_min: strikeout_pos.0 as u16,
+                strikeout_pos_max: strikeout_pos.1 as u16,
+                cursor_pos_min: cursor_pos.0 as u16,
+                cursor_pos_max: cursor_pos.1 as u16,
+            },
+        );
+
+        if cached.cached() {
+            continue;
+        }
+
+        let ch = cell.symbol().chars().next().unwrap();
+        let is_emoji = ch.is_emoji_char()
+            && !matches!(ch.general_category_group(), GeneralCategoryGroup::Number);
+
+        let (cached, image, colored) = rasterize_glyph(
+            cached,
+            metrics,
+            info,
+            fake_italic & !is_emoji,
+            fake_bold,
+            advance_scale,
+            font_box.ascender,
+            is_emoji,
+            is_fallback,
+        );
+
+        wgpu_base.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &wgpu_atlas.text_cache,
+                mip_level: 0,
+                origin: Origin3d {
+                    x: cached.x,
+                    y: cached.y,
+                    z: 0,
+                },
+                aspect: TextureAspect::All,
+            },
+            bytemuck::cast_slice(&image),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cached.width * size_of::<u32>() as u32),
+                rows_per_image: Some(cached.height),
+            },
+            Extent3d {
+                width: cached.width,
+                height: cached.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        wgpu_base.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &wgpu_atlas.text_mask,
+                mip_level: 0,
+                origin: Origin3d {
+                    x: cached.x,
+                    y: cached.y,
+                    z: 0,
+                },
+                aspect: TextureAspect::All,
+            },
+            &bg_mask(cached.width, cached.height, colored),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cached.width),
+                rows_per_image: Some(cached.height),
+            },
+            Extent3d {
+                width: cached.width,
+                height: cached.height,
+                depth_or_array_layers: 1,
+            },
+        )
+    }
+
+    buffer.clear()
 }
 
 fn bg_mask(

@@ -17,6 +17,8 @@ pub struct Font<'a> {
 pub(crate) struct FontBox {
     pub width: u32,
     pub height: u32,
+    pub ascender: f32,
+    pub scale: f32,
 }
 
 impl<'a> Font<'a> {
@@ -404,6 +406,8 @@ impl<'a> Fonts<'a> {
         FontBox {
             width: self.min_width_px(),
             height: self.height_px(),
+            ascender: self.ascender(),
+            scale: self.scale(),
         }
     }
 

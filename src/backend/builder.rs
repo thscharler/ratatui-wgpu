@@ -660,8 +660,8 @@ where
 
             plan_cache: PlanCache::new(font_count.max(2)),
             tmp_buffer: UnicodeBuffer::new(),
-            tmp_text: String::new(),
-            tmp_text_to_cell: vec![],
+            tmp_rowbuf: String::new(),
+            tmp_rowbuf_to_cell: vec![],
 
             wgpu_base: WgpuBase {
                 surface,
