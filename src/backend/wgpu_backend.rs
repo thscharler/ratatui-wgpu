@@ -112,6 +112,7 @@ type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 pub struct WgpuBackend<'f, 's> {
     // cell data
     pub(super) cells: Vec<Cell>,
+    pub(super) cell_remap: Vec<u16>,
     pub(super) dirty_rows: BitVec,
     pub(super) rendered: Vec<Rendered>,
     pub(super) fast_blinking: BitVec,
@@ -119,12 +120,11 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) cursor: (u16, u16),
     pub(super) cursor_view: (u16, u16),
 
-    // temporaries
+    // temporaries for shaping
     pub(super) plan_cache: PlanCache,
     pub(super) tmp_text: String,
     pub(super) tmp_buffer: UnicodeBuffer,
     pub(super) tmp_text_to_cell: Vec<u16>,
-    pub(super) tmp_cell_to_visible: Vec<u16>,
 
     // wgpu
     pub(super) surface: RenderSurface<'s>,
@@ -132,18 +132,19 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) device: Device,
     pub(super) queue: Queue,
     pub(super) post_process: Box<dyn PostProcessor + 'static>,
-
-    // wgpu data
-    pub(super) wgpu_state: WgpuState,
-    pub(super) cached: Atlas,
-    pub(super) text_cache: Texture,
-    pub(super) text_mask: Texture,
+    // wgpu input
     pub(super) bg_vertices: Vec<TextBgVertexMember>,
     pub(super) text_indices: Vec<[u32; 6]>,
     pub(super) text_vertices: Vec<TextVertexMember>,
+    // wgpu data
+    pub(super) cached: Atlas,
+    pub(super) text_cache: Texture,
+    pub(super) text_mask: Texture,
     pub(super) text_bg_compositor: TextCacheBgPipeline,
     pub(super) text_fg_compositor: TextCacheFgPipeline,
     pub(super) text_screen_size_buffer: Buffer,
+    // wgpu output
+    pub(super) wgpu_state: WgpuState,
 
     // backend state flags
     pub(super) viewport: Viewport,
@@ -205,6 +206,11 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     /// Current cursor color.
     pub fn cursor_color(&self) -> ratatui_core::style::Color {
         self.cursor_color
+    }
+
+    /// Map a physical cursor position to a col/row position.
+    pub fn pos_to_cell(&self, pos: (u32, u32)) -> ratatui_core::layout::Position {
+        todo!();
     }
 
     /// Get the [`PostProcessor`] associated with this backend.
@@ -389,6 +395,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         let chars_high = height / self.fonts.height_px();
 
         self.cells.clear();
+        self.cell_remap.clear();
         self.rendered.clear();
         self.fast_blinking.clear();
         self.slow_blinking.clear();
@@ -701,6 +708,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
         self.cells
             .resize(bounds.height as usize * bounds.width as usize, Cell::EMPTY);
+        self.cell_remap
+            .resize(bounds.height as usize * bounds.width as usize, 0);
         self.rendered.resize_with(
             bounds.height as usize * bounds.width as usize,
             Rendered::default,
@@ -712,7 +721,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         self.dirty_rows.resize(bounds.height as usize, true);
 
         for (x, y, cell) in content {
-            let index = y as usize * bounds.width as usize + x as usize;
+            let offset = y as usize * bounds.width as usize;
+            let index = offset + x as usize;
 
             self.fast_blinking
                 .set(index, cell.modifier.contains(Modifier::RAPID_BLINK));
@@ -827,7 +837,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             // that cell.
             self.tmp_text.clear();
             self.tmp_text_to_cell.clear();
-            self.tmp_cell_to_visible.clear();
 
             let mut fontmap = Vec::with_capacity(self.tmp_text_to_cell.capacity());
             for (idx, cell) in row.iter().enumerate() {
@@ -838,7 +847,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         idx as u16,
                     );
                 }
-                self.tmp_cell_to_visible.push(idx as u16);
+
+                self.cell_remap[row_offset + idx] = idx as u16;
 
                 fontmap.push(self.fonts.font_for_cell(cell));
             }
@@ -848,7 +858,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 self.rendered[row_offset + cell_idx].clear();
             }
 
-            let mut shape = |cell_to_visible: &[u16],
+            let mut shape = |cell_remap: &[u16],
                              font: &Font,
                              fake_bold,
                              fake_italic,
@@ -876,7 +886,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     // every glyph in the cell is positioned.
                     let mut first_glyph = false;
                     if last_cell_idx != Some(cell_idx) {
-                        x = cell_to_visible[cell_idx] as i32 * self.fonts.min_width_px() as i32;
+                        x = cell_remap[row_offset + cell_idx] as i32
+                            * self.fonts.min_width_px() as i32;
                         chars_wide = cell.symbol().width().max(1);
                         last_advance = 0;
                         first_glyph = true;
@@ -1032,7 +1043,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         let mut buffer = mem::take(&mut self.tmp_buffer);
 
                         self.tmp_buffer = shape(
-                            &self.tmp_cell_to_visible,
+                            &self.cell_remap,
                             current_font,
                             current_fake_bold,
                             current_fake_italic,
@@ -1045,13 +1056,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         );
                     }
 
-                    if level.is_ltr() {
-                        if (cell_idx as u16, y as u16) == self.cursor {
-                            self.cursor_view = (cell_idx as u16, y as u16);
-                            self.cursor_style = self.cursor_style.to_ltr();
-                        }
-                        self.tmp_cell_to_visible[cell_idx] = cell_idx as u16;
-                    } else {
+                    if level.is_rtl() {
                         let view_idx = (max_cell_idx - (cell_idx - min_cell_idx)) as u16;
 
                         if (cell_idx as u16, y as u16) == self.cursor {
@@ -1059,7 +1064,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             self.cursor_style = self.cursor_style.to_rtl();
                         }
 
-                        self.tmp_cell_to_visible[cell_idx] = view_idx;
+                        self.cell_remap[row_offset + cell_idx] = view_idx;
                     }
 
                     self.tmp_buffer.add(ch, (range.start + idx) as u32);
@@ -1074,7 +1079,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
             let mut buffer = mem::take(&mut self.tmp_buffer);
             self.tmp_buffer = shape(
-                &self.tmp_cell_to_visible,
+                &self.cell_remap,
                 current_font,
                 current_fake_bold,
                 current_fake_italic,
