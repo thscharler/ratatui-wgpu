@@ -21,6 +21,14 @@ pub(crate) struct FontBox {
     pub scale: f32,
 }
 
+pub(crate) struct RenderedFont<'a> {
+    pub font_box: FontBox,
+    pub font: &'a Font<'a>,
+    pub fake_bold: bool,
+    pub fake_italic: bool,
+    pub is_fallback: bool,
+}
+
 impl<'a> Font<'a> {
     /// Create a new Font from data. Returns [`None`] if the font cannot
     /// be parsed.
@@ -78,17 +86,24 @@ impl Font<'_> {
     ) -> u32 {
         (self.advance * self.scale(height_px)) as u32
     }
+}
+
+impl<'a> RenderedFont<'a> {
+    pub(crate) fn font(&self) -> &'_ Face<'_> {
+        &self.font.font
+    }
 
     pub(crate) fn underline(
         &self,
         height_px: u32,
         box_height_px: u32,
     ) -> (u32, u32) {
-        let scale = self.scale(height_px);
+        let scale = self.font.scale(height_px);
 
         let ascender = self.font.ascender() as f32;
 
         let underline_position = self
+            .font
             .font
             .underline_metrics()
             .map(|m| m.position as f32)
@@ -96,6 +111,7 @@ impl Font<'_> {
         let underline_position = ascender - underline_position;
 
         let underline_thickness = self
+            .font
             .font
             .underline_metrics()
             .map(|m| m.thickness as f32)
@@ -122,11 +138,12 @@ impl Font<'_> {
         height_px: u32,
         _box_height: u32,
     ) -> (u32, u32) {
-        let scale = self.scale(height_px);
+        let scale = self.font.scale(height_px);
 
         let ascender = self.font.ascender() as f32;
 
         let strikeout_position = self
+            .font
             .font
             .strikeout_metrics()
             .map(|m| m.position as f32)
@@ -138,6 +155,7 @@ impl Font<'_> {
         };
 
         let strikeout_thickness = self
+            .font
             .font
             .strikeout_metrics()
             .map(|m| m.thickness as f32)

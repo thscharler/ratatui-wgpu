@@ -5,8 +5,8 @@ use crate::backend::Viewport;
 use crate::backend::{PostProcessor, WgpuAtlas, WgpuBase, WgpuPipeline, WgpuVertices};
 use crate::colors::ColorTable;
 use crate::colors::Rgb;
-use crate::fonts::Fonts;
 use crate::fonts::{Font, FontBox};
+use crate::fonts::{Fonts, RenderedFont};
 use crate::utils::plan_cache::PlanCache;
 use crate::utils::text_atlas::CacheRect;
 use crate::utils::text_atlas::Entry;
@@ -37,7 +37,6 @@ use rustybuzz::ttf_parser::RgbaColor;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::GlyphBuffer;
 use rustybuzz::UnicodeBuffer;
-use std::collections::HashMap;
 use std::mem::size_of;
 use std::num::NonZeroU64;
 use std::{iter, mem};
@@ -870,12 +869,12 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         // reset blink, removes flickering.
         self.state.cursor_blink = 0;
 
-        for (y, row) in self.state.cells.chunks(bounds.width as usize).enumerate() {
-            if !self.state.dirty_rows[y] {
+        for (row_idx, row_cells) in self.state.cells.chunks(bounds.width as usize).enumerate() {
+            if !self.state.dirty_rows[row_idx] {
                 continue;
             }
 
-            let row_offset = y.min(bounds.height as usize - 1) * bounds.width as usize;
+            let row_offset = row_idx.min(bounds.height as usize - 1) * bounds.width as usize;
 
             // This block concatenates the strings for the row into one string for bidi
             // resolution, then maps bytes for the string to their associated cell index. It
@@ -885,16 +884,16 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             self.tmp_rowbuf_to_cell.clear();
 
             let mut fontmap = Vec::with_capacity(self.tmp_rowbuf_to_cell.capacity());
-            for (idx, cell) in row.iter().enumerate() {
+            for (cell_idx, cell) in row_cells.iter().enumerate() {
                 if !cell.skip {
                     self.tmp_rowbuf.push_str(cell.symbol());
                     self.tmp_rowbuf_to_cell.resize(
                         self.tmp_rowbuf_to_cell.len() + cell.symbol().len(),
-                        idx as u16,
+                        cell_idx as u16,
                     );
                 }
 
-                self.state.cell_remap[row_offset + idx] = idx as u16;
+                self.state.cell_remap[row_offset + cell_idx] = cell_idx as u16;
 
                 fontmap.push(self.state.fonts.font_for_cell(cell));
             }
@@ -917,13 +916,13 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             let mut current_level = Level::ltr();
 
             for (level, range) in runs.into_iter().map(|run| (levels[run.start], run)) {
-                let chars = &self.tmp_rowbuf[range.clone()];
-                let cells = &self.tmp_rowbuf_to_cell[range.clone()];
-                let min_cell_idx = *cells.first().expect("first") as usize;
-                let max_cell_idx = *cells.last().expect("last") as usize;
+                let bidi_run_chars = &self.tmp_rowbuf[range.clone()];
+                let bidi_run_cells = &self.tmp_rowbuf_to_cell[range.clone()];
+                let min_cell_idx = *bidi_run_cells.first().expect("first") as usize;
+                let max_cell_idx = *bidi_run_cells.last().expect("last") as usize;
 
-                for (idx, ch) in chars.char_indices() {
-                    let cell_idx = cells[idx] as usize;
+                for (ch_idx, ch) in bidi_run_chars.char_indices() {
+                    let cell_idx = bidi_run_cells[ch_idx] as usize;
 
                     let (font, fake_bold, fake_italic, is_fallback) = fontmap[cell_idx];
                     if font.id() != current_font.id()
@@ -936,44 +935,46 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                         self.tmp_buffer = shape(
                             &self.wgpu_base,
-                            bounds,
-                            y,
-                            row,
-                            &self.state.cell_remap,
+                            row_idx,
+                            row_cells,
+                            &self.state.cell_remap[row_offset..row_offset + bounds.width as usize],
                             &self.tmp_rowbuf_to_cell,
                             shape_with_plan(
                                 current_font.font(),
                                 self.plan_cache.get(current_font, &mut buffer),
                                 buffer,
                             ),
-                            self.state.fonts.font_box(),
-                            current_font,
-                            current_fake_bold,
-                            current_fake_italic,
-                            current_is_fallback,
+                            RenderedFont {
+                                font_box: self.state.fonts.font_box(),
+                                font: current_font,
+                                fake_bold: current_fake_bold,
+                                fake_italic: current_fake_italic,
+                                is_fallback: current_is_fallback,
+                            },
                             self.state.cursor_visible,
                             self.state.cursor,
-                            &mut self.rendered,
+                            &mut self.rendered[row_offset..row_offset + bounds.width as usize],
                             &mut self.wgpu_atlas,
                         );
                     }
 
                     if level.is_rtl() {
+                        // rtl flip visible cell index for this run.
                         let view_idx = (max_cell_idx - (cell_idx - min_cell_idx)) as u16;
 
-                        if (cell_idx as u16, y as u16) == self.state.cursor {
-                            self.state.cursor_view = (view_idx, y as u16);
+                        if (cell_idx as u16, row_idx as u16) == self.state.cursor {
+                            self.state.cursor_view = (view_idx, row_idx as u16);
                             self.state.cursor_style = self.state.cursor_style.to_rtl();
                         }
 
                         self.state.cell_remap[row_offset + cell_idx] = view_idx;
                     } else {
-                        if (cell_idx as u16, y as u16) == self.state.cursor {
+                        if (cell_idx as u16, row_idx as u16) == self.state.cursor {
                             self.state.cursor_style = self.state.cursor_style.to_ltr();
                         }
                     }
 
-                    self.tmp_buffer.add(ch, (range.start + idx) as u32);
+                    self.tmp_buffer.add(ch, (range.start + ch_idx) as u32);
 
                     current_font = font;
                     current_fake_bold = fake_bold;
@@ -986,24 +987,25 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             let mut buffer = mem::take(&mut self.tmp_buffer);
             self.tmp_buffer = shape(
                 &self.wgpu_base,
-                bounds,
-                y,
-                row,
-                &self.state.cell_remap,
+                row_idx,
+                row_cells,
+                &self.state.cell_remap[row_offset..row_offset + bounds.width as usize],
                 &self.tmp_rowbuf_to_cell,
                 shape_with_plan(
                     current_font.font(),
                     self.plan_cache.get(current_font, &mut buffer),
                     buffer,
                 ),
-                self.state.fonts.font_box(),
-                current_font,
-                current_fake_bold,
-                current_fake_italic,
-                current_is_fallback,
+                RenderedFont {
+                    font_box: self.state.fonts.font_box(),
+                    font: current_font,
+                    fake_bold: current_fake_bold,
+                    fake_italic: current_fake_italic,
+                    is_fallback: current_is_fallback,
+                },
                 self.state.cursor_visible,
                 self.state.cursor,
-                &mut self.rendered,
+                &mut self.rendered[row_offset..row_offset + bounds.width as usize],
                 &mut self.wgpu_atlas,
             );
         }
@@ -1083,27 +1085,33 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     type Error = std::io::Error;
 }
 
+// shape a part of one row.
+//
+// the glyphs come as a GlyphBuffer provided by the bidi algorithm.
+// each glyph is mapped to a cell, which in turn might be mapped to a
+// visible cell if there is any reordering during bidi.
+//
+// then the glyph is positioned and rendered if it is not already in the
+// glyph-cache.
+//
+// Positioning of glyphs always restarts with each new cell.
+// This ensures that the output is mostly cell-aligned and makes
+// the final result more predictable.
 fn shape(
     wgpu_base: &WgpuBase,
-    bounds: Size,
     y: usize,
     row: &[Cell],
     cell_remap: &[u16],
     buf_to_cell: &[u16],
     buffer: GlyphBuffer,
-    font_box: FontBox,
-    font: &Font,
-    fake_bold: bool,
-    fake_italic: bool,
-    is_fallback: bool,
+    font: RenderedFont<'_>,
     cursor_visible: bool,
     cursor: (u16, u16),
-    rendered: &mut Vec<Rendered>,
+    rendered: &mut [Rendered],
     wgpu_atlas: &mut WgpuAtlas,
 ) -> UnicodeBuffer {
-    let row_offset = y.min(bounds.height as usize - 1) * bounds.width as usize;
     let metrics = font.font();
-    let advance_scale = font_box.scale;
+    let advance_scale = font.font_box.scale;
 
     let mut x = 0;
     let mut chars_wide = 1;
@@ -1115,7 +1123,6 @@ fn shape(
         .zip(buffer.glyph_positions().iter())
     {
         let cell_idx = buf_to_cell[info.cluster as usize] as usize;
-        let offset = row_offset + cell_idx.min(bounds.width as usize - 1);
         let cell = &row[cell_idx];
 
         // Every cell has it's defined position on the grid.
@@ -1123,7 +1130,7 @@ fn shape(
         // every glyph in the cell is positioned.
         let mut first_glyph = false;
         if last_cell_idx != Some(cell_idx) {
-            x = cell_remap[row_offset + cell_idx] as i32 * font_box.width as i32;
+            x = cell_remap[cell_idx] as i32 * font.font_box.width as i32;
             chars_wide = cell.symbol().width().max(1);
             last_advance = 0;
             first_glyph = true;
@@ -1141,8 +1148,8 @@ fn shape(
         let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
         let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
 
-        let basey =
-            y as i32 * font_box.height as i32 + (position.y_offset as f32 * advance_scale) as i32;
+        let basey = y as i32 * font.font_box.height as i32
+            + (position.y_offset as f32 * advance_scale) as i32;
 
         let mut basex = x + glyph_offset;
         // special case: combining glyphs with offset == 0 && advance == 0
@@ -1169,32 +1176,33 @@ fn shape(
             style: cell.modifier.intersection(limit_modifiers),
             glyph: info.glyph_id,
             width: chars_wide as u8,
-            font: font.id(),
+            font: font.font.id(),
         };
 
-        let cached =
-            wgpu_atlas
-                .cached
-                .get(&key, chars_wide as u32 * font_box.width, font_box.height);
+        let cached = wgpu_atlas.cached.get(
+            &key,
+            chars_wide as u32 * font.font_box.width,
+            font.font_box.height,
+        );
 
         let cursor_pos = if first_glyph && cursor_visible && (cell_idx as u16, y as u16) == cursor {
-            font.underline(font_box.height, cached.height)
+            font.underline(font.font_box.height, cached.height)
         } else {
             (0, 0)
         };
 
         let underline_pos = if key.style.contains(Modifier::UNDERLINED) {
-            font.underline(font_box.height, cached.height)
+            font.underline(font.font_box.height, cached.height)
         } else {
             (0, 0)
         };
         let strikeout_pos = if key.style.contains(Modifier::CROSSED_OUT) {
-            font.strikeout(font_box.height, cached.height)
+            font.strikeout(font.font_box.height, cached.height)
         } else {
             (0, 0)
         };
 
-        rendered[offset].insert(
+        rendered[cell_idx].insert(
             (basex, basey, GlyphId(info.glyph_id as _)),
             RenderInfo {
                 cached: *cached,
@@ -1222,12 +1230,12 @@ fn shape(
             cached,
             metrics,
             info,
-            fake_italic & !is_emoji,
-            fake_bold,
+            font.fake_italic & !is_emoji,
+            font.fake_bold,
             advance_scale,
-            font_box.ascender,
+            font.font_box.ascender,
             is_emoji,
-            is_fallback,
+            font.is_fallback,
         );
 
         wgpu_base.queue.write_texture(
