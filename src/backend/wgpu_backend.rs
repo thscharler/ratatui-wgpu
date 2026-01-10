@@ -25,8 +25,8 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::num::NonZeroU64;
 use std::{iter, mem};
+use unicode_bidi::Level;
 use unicode_bidi::ParagraphBidiInfo;
-use unicode_bidi::{Level, LTR_LEVEL, RTL_LEVEL};
 use unicode_properties::GeneralCategoryGroup;
 use unicode_properties::UnicodeEmoji;
 use unicode_properties::UnicodeGeneralCategory;
@@ -849,7 +849,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             }
 
             let mut shape = |cell_to_visible: &[u16],
-                             vis_cursor: (u16, u16),
                              font: &Font,
                              fake_bold,
                              fake_italic,
@@ -1013,8 +1012,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 mut current_is_fallback,
             ) = fontmap[0];
             let mut current_level = Level::ltr();
-            let mut current_cell_idx = 0;
-            let mut reset_cell_idx = 0;
 
             for (level, range) in runs.into_iter().map(|run| (levels[run.start], run)) {
                 let chars = &self.tmp_text[range.clone()];
@@ -1036,7 +1033,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                         self.tmp_buffer = shape(
                             &self.tmp_cell_to_visible,
-                            self.cursor_view,
                             current_font,
                             current_fake_bold,
                             current_fake_italic,
@@ -1049,34 +1045,21 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         );
                     }
 
-                    // remap cells according to bidi remapping.
-                    if current_level.is_ltr() != level.is_ltr() {
-                        if level.is_rtl() {
-                            current_cell_idx += (max_cell_idx - min_cell_idx) as u16;
-                            reset_cell_idx = current_cell_idx + 1;
-                        } else {
-                            current_cell_idx = reset_cell_idx;
-                        }
-                    }
-
                     if level.is_ltr() {
                         if (cell_idx as u16, y as u16) == self.cursor {
-                            self.cursor_view = (current_cell_idx, y as u16);
+                            self.cursor_view = (cell_idx as u16, y as u16);
                             self.cursor_style = self.cursor_style.to_ltr();
                         }
-
-                        self.tmp_cell_to_visible[cell_idx] = current_cell_idx;
-                        current_cell_idx += ch.width().unwrap_or(1) as u16;
+                        self.tmp_cell_to_visible[cell_idx] = cell_idx as u16;
                     } else {
+                        let view_idx = (max_cell_idx - (cell_idx - min_cell_idx)) as u16;
+
                         if (cell_idx as u16, y as u16) == self.cursor {
-                            self.cursor_view = (current_cell_idx, y as u16);
+                            self.cursor_view = (view_idx, y as u16);
                             self.cursor_style = self.cursor_style.to_rtl();
                         }
 
-                        self.tmp_cell_to_visible[cell_idx] = current_cell_idx;
-                        if current_cell_idx > 0 {
-                            current_cell_idx -= ch.width().unwrap_or(1) as u16;
-                        }
+                        self.tmp_cell_to_visible[cell_idx] = view_idx;
                     }
 
                     self.tmp_buffer.add(ch, (range.start + idx) as u32);
@@ -1092,7 +1075,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             let mut buffer = mem::take(&mut self.tmp_buffer);
             self.tmp_buffer = shape(
                 &self.tmp_cell_to_visible,
-                self.cursor_view,
                 current_font,
                 current_fake_bold,
                 current_fake_italic,
