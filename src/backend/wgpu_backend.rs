@@ -1388,6 +1388,7 @@ fn rasterize_glyph(
     };
 
     if info.glyph_id == 0 {
+        // the glyph provided by the font is ugly most of the time.
         let width = cached.width as usize;
         let height = cached.height as usize;
 
