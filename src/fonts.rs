@@ -13,6 +13,12 @@ pub struct Font<'a> {
     id: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FontBox {
+    pub width: u32,
+    pub height: u32,
+}
+
 impl<'a> Font<'a> {
     /// Create a new Font from data. Returns [`None`] if the font cannot
     /// be parsed.
@@ -393,6 +399,14 @@ impl<'a> Fonts<'a> {
 }
 
 impl<'a> Fonts<'a> {
+    /// Size of a cell with the current font in px.
+    pub(crate) fn font_box(&self) -> FontBox {
+        FontBox {
+            width: self.min_width_px(),
+            height: self.height_px(),
+        }
+    }
+
     /// The minimum width (in pixels) across all fonts.
     pub(crate) fn min_width_px(&self) -> u32 {
         self.char_width_px

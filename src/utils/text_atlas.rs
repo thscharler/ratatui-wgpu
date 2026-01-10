@@ -5,6 +5,7 @@ use evictor::Lru;
 use ratatui_core::style::Modifier;
 
 use crate::Fonts;
+use crate::fonts::FontBox;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct Key {
@@ -58,12 +59,12 @@ pub(crate) struct Atlas {
 
 impl Atlas {
     pub(crate) fn new(
-        fonts: &Fonts,
+        font_box: FontBox,
         width: u32,
         height: u32,
     ) -> Self {
-        let entry_width = fonts.min_width_px() * 2;
-        let entry_height = fonts.height_px();
+        let entry_width = font_box.width * 2;
+        let entry_height = font_box.height;
         let max_entries = ((width / entry_width) * (height / entry_height)).max(1);
         // debug!("Atlas with WxH {entry_width}x{entry_height} can hold {max_entries}");
 
@@ -172,7 +173,7 @@ mod tests {
             .unwrap(),
             24,
         );
-        let mut atlas = Atlas::new(&fonts, 24, 24);
+        let mut atlas = Atlas::new(fonts.font_box(), 24, 24);
 
         for idx in 0..atlas.max_entries {
             atlas.get(

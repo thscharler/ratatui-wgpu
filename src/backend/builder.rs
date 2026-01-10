@@ -57,14 +57,14 @@ use wgpu::VertexState;
 use wgpu::VertexStepMode;
 use wgpu::{include_wgsl, Features};
 
-use crate::backend::wgpu_backend::WgpuBackend;
-use crate::backend::TextBgVertexMember;
-use crate::backend::TextCacheBgPipeline;
+use crate::backend::wgpu_backend::{BackendState, WgpuBackend};
 use crate::backend::TextCacheFgPipeline;
 use crate::backend::TextVertexMember;
 use crate::backend::Viewport;
 use crate::backend::{build_wgpu_state, PostProcessorBuilder};
 use crate::backend::{Dimensions, RenderSurface};
+use crate::backend::{TextBgVertexMember, WgpuAtlas, WgpuBase, WgpuVertices};
+use crate::backend::{TextCacheBgPipeline, WgpuPipeline};
 use crate::colors::named;
 use crate::colors::ColorTable;
 use crate::fonts::Font;
@@ -613,7 +613,7 @@ where
             &sampler,
         );
 
-        let wgpu_state = build_wgpu_state(
+        let wgpu_view = build_wgpu_state(
             &device,
             (drawable_width / self.fonts.min_width_px()) * self.fonts.min_width_px(),
             (drawable_height / self.fonts.height_px()) * self.fonts.height_px(),
@@ -622,60 +622,70 @@ where
         let reset_fg = self.colors.c2c(self.reset_fg, [255; 3]);
         let reset_bg = self.colors.c2c(self.reset_bg, [0; 3]);
 
-        let post_process =
-            self.postprocessor
-                .compile(&device, &wgpu_state.text_dest_view, &surface_config);
+        let font_box = self.fonts.font_box();
+        let font_count = self.fonts.count();
+
+        let post_process = self
+            .postprocessor
+            .compile(&device, &wgpu_view, &surface_config);
 
         Ok(WgpuBackend {
-            cells: vec![],
-            cell_remap: vec![],
-            dirty_rows: BitVec::new(),
+            state: BackendState {
+                cells: vec![],
+                cell_remap: vec![],
+                dirty_rows: Default::default(),
+                fast_blinking: Default::default(),
+                slow_blinking: Default::default(),
+                cursor: (0, 0),
+                cursor_view: (0, 0),
+                viewport: self.viewport,
+                fonts: self.fonts,
+                colors: self.colors,
+                reset_fg,
+                reset_bg,
+                cursor_color: self.cursor_color,
+                cursor_style: self.cursor_style,
+                cursor_visible: true,
+                cursor_blink: 0,
+                cursor_divisor: self.cursor_blink,
+                cursor_showing: true,
+                blink: 0,
+                fast_blink_divisor: self.fast_blink,
+                fast_blink_showing: true,
+                slow_blink_divisor: self.slow_blink,
+                slow_blink_showing: true,
+            },
+
             rendered: vec![],
-            fast_blinking: BitVec::new(),
-            slow_blinking: BitVec::new(),
-            cursor: (0, 0),
-            cursor_view: (0, 0),
-            
-            plan_cache: PlanCache::new(self.fonts.count().max(2)),
+
+            plan_cache: PlanCache::new(font_count.max(2)),
             tmp_buffer: UnicodeBuffer::new(),
             tmp_text: String::new(),
             tmp_text_to_cell: vec![],
 
-            surface,
-            surface_config,
-            device,
-            queue,
-            post_process: Box::new(post_process),
-
-            wgpu_state,
-            cached: Atlas::new(&self.fonts, CACHE_WIDTH, CACHE_HEIGHT),
-            text_cache,
-            text_mask,
-            bg_vertices: vec![],
-            text_indices: vec![],
-            text_vertices: vec![],
-            text_bg_compositor,
-            text_fg_compositor,
-            text_screen_size_buffer,
-
-            viewport: self.viewport,
-            fonts: self.fonts,
-            colors: self.colors,
-            reset_fg,
-            reset_bg,
-
-            cursor_color: self.cursor_color,
-            cursor_style: self.cursor_style,
-            cursor_visible: true,
-            cursor_blink: 0,
-            cursor_divisor: self.cursor_blink,
-            cursor_showing: true,
-
-            blink: 0,
-            fast_blink_divisor: self.fast_blink,
-            fast_blink_showing: true,
-            slow_blink_divisor: self.slow_blink,
-            slow_blink_showing: true,
+            wgpu_base: WgpuBase {
+                surface,
+                surface_config,
+                device,
+                queue,
+                text_dest_view: wgpu_view,
+            },
+            wgpu_vertices: WgpuVertices {
+                bg_vertices: vec![],
+                text_indices: vec![],
+                text_vertices: vec![],
+            },
+            wgpu_atlas: WgpuAtlas {
+                cached: Atlas::new(font_box, CACHE_WIDTH, CACHE_HEIGHT),
+                text_cache,
+                text_mask,
+            },
+            wgpu_post_process: Box::new(post_process),
+            wgpu_pipeline: WgpuPipeline {
+                text_screen_size_buffer,
+                text_bg_compositor,
+                text_fg_compositor,
+            },
         })
     }
 }

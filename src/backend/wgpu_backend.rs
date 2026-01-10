@@ -1,3 +1,19 @@
+use crate::backend::build_wgpu_state;
+use crate::backend::TextBgVertexMember;
+use crate::backend::TextVertexMember;
+use crate::backend::Viewport;
+use crate::backend::{PostProcessor, WgpuAtlas, WgpuBase, WgpuPipeline, WgpuVertices};
+use crate::colors::ColorTable;
+use crate::colors::Rgb;
+use crate::fonts::Fonts;
+use crate::fonts::{Font, FontBox};
+use crate::utils::plan_cache::PlanCache;
+use crate::utils::text_atlas::CacheRect;
+use crate::utils::text_atlas::Entry;
+use crate::utils::text_atlas::Key;
+use crate::utils::Outline;
+use crate::utils::Painter;
+use crate::{CursorStyle, PostProcessorBuilder, RandomState};
 use bitvec::order::Lsb0;
 use bitvec::slice::BitSlice;
 use bitvec::vec::BitVec;
@@ -30,46 +46,20 @@ use unicode_bidi::ParagraphBidiInfo;
 use unicode_properties::GeneralCategoryGroup;
 use unicode_properties::UnicodeEmoji;
 use unicode_properties::UnicodeGeneralCategory;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
-use wgpu::Buffer;
 use wgpu::BufferUsages;
 use wgpu::CommandEncoderDescriptor;
-use wgpu::Device;
 use wgpu::Extent3d;
 use wgpu::IndexFormat;
 use wgpu::LoadOp;
 use wgpu::Operations;
 use wgpu::Origin3d;
-use wgpu::Queue;
 use wgpu::RenderPassColorAttachment;
 use wgpu::RenderPassDescriptor;
 use wgpu::StoreOp;
-use wgpu::SurfaceConfiguration;
-use wgpu::Texture;
 use wgpu::TextureAspect;
-
-use crate::backend::PostProcessor;
-use crate::backend::TextBgVertexMember;
-use crate::backend::TextCacheBgPipeline;
-use crate::backend::TextCacheFgPipeline;
-use crate::backend::TextVertexMember;
-use crate::backend::Viewport;
-use crate::backend::WgpuState;
-use crate::backend::{build_wgpu_state, RenderSurface};
-use crate::colors::ColorTable;
-use crate::colors::Rgb;
-use crate::fonts::Font;
-use crate::fonts::Fonts;
-use crate::utils::plan_cache::PlanCache;
-use crate::utils::text_atlas::Atlas;
-use crate::utils::text_atlas::CacheRect;
-use crate::utils::text_atlas::Entry;
-use crate::utils::text_atlas::Key;
-use crate::utils::Outline;
-use crate::utils::Painter;
-use crate::{CursorStyle, PostProcessorBuilder, RandomState};
 
 const NULL_CELL: Cell = {
     let mut c = Cell::new("");
@@ -97,54 +87,15 @@ pub(super) struct RenderInfo {
 /// vertices.
 type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 
-/// A ratatui backend leveraging wgpu for rendering.
-///
-/// Constructed using a [`Builder`](crate::Builder).
-///
-/// The first lifetime parameter is the lifetime of the data for referenced
-/// [`Font`] objects. The second lifetime parameter is the lifetime of the
-/// referenced [`Surface`] (typically the lifetime of your window object).
-///
-/// Limitations:
-/// - The cursor is tracked but not rendered.
-/// - No builtin accessibilty, although [`WgpuBackend::get_text`] is provided to
-///   access the screen's contents.
-pub struct WgpuBackend<'f, 's> {
+pub(crate) struct BackendState<'f> {
     // cell data
     pub(super) cells: Vec<Cell>,
     pub(super) cell_remap: Vec<u16>,
     pub(super) dirty_rows: BitVec,
-    pub(super) rendered: Vec<Rendered>,
     pub(super) fast_blinking: BitVec,
     pub(super) slow_blinking: BitVec,
     pub(super) cursor: (u16, u16),
     pub(super) cursor_view: (u16, u16),
-
-    // temporaries for shaping
-    pub(super) plan_cache: PlanCache,
-    pub(super) tmp_text: String,
-    pub(super) tmp_buffer: UnicodeBuffer,
-    pub(super) tmp_text_to_cell: Vec<u16>,
-
-    // wgpu
-    pub(super) surface: RenderSurface<'s>,
-    pub(super) surface_config: SurfaceConfiguration,
-    pub(super) device: Device,
-    pub(super) queue: Queue,
-    pub(super) post_process: Box<dyn PostProcessor + 'static>,
-    // wgpu input
-    pub(super) bg_vertices: Vec<TextBgVertexMember>,
-    pub(super) text_indices: Vec<[u32; 6]>,
-    pub(super) text_vertices: Vec<TextVertexMember>,
-    // wgpu data
-    pub(super) cached: Atlas,
-    pub(super) text_cache: Texture,
-    pub(super) text_mask: Texture,
-    pub(super) text_bg_compositor: TextCacheBgPipeline,
-    pub(super) text_fg_compositor: TextCacheFgPipeline,
-    pub(super) text_screen_size_buffer: Buffer,
-    // wgpu output
-    pub(super) wgpu_state: WgpuState,
 
     // backend state flags
     pub(super) viewport: Viewport,
@@ -167,19 +118,52 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) slow_blink_showing: bool,
 }
 
+/// A ratatui backend leveraging wgpu for rendering.
+///
+/// Constructed using a [`Builder`](crate::Builder).
+///
+/// The first lifetime parameter is the lifetime of the data for referenced
+/// [`Font`] objects. The second lifetime parameter is the lifetime of the
+/// referenced [`Surface`] (typically the lifetime of your window object).
+///
+/// Limitations:
+/// - The cursor is tracked but not rendered.
+/// - No builtin accessibilty, although [`WgpuBackend::get_text`] is provided to
+///   access the screen's contents.
+pub struct WgpuBackend<'f, 's> {
+    // ratatui state
+    pub(super) state: BackendState<'f>,
+
+    // positioned glyphs.
+    pub(super) rendered: Vec<Rendered>,
+
+    // temporaries for shaping
+    pub(super) plan_cache: PlanCache,
+    pub(super) tmp_text: String,
+    pub(super) tmp_buffer: UnicodeBuffer,
+    pub(super) tmp_text_to_cell: Vec<u16>,
+
+    // wgpu input
+    pub(super) wgpu_base: WgpuBase<'s>,
+    pub(super) wgpu_vertices: WgpuVertices,
+    pub(super) wgpu_atlas: WgpuAtlas,
+    pub(super) wgpu_post_process: Box<dyn PostProcessor + 'static>,
+    pub(super) wgpu_pipeline: WgpuPipeline,
+}
+
 impl<'f, 's> WgpuBackend<'f, 's> {
     pub fn set_bg_color(
         &mut self,
         color: ratatui_core::style::Color,
     ) {
-        self.reset_bg = self.colors.c2c(color, [0; 3]);
+        self.state.reset_bg = self.state.colors.c2c(color, [0; 3]);
     }
 
     pub fn set_fg_color(
         &mut self,
         color: ratatui_core::style::Color,
     ) {
-        self.reset_fg = self.colors.c2c(color, [255; 3]);
+        self.state.reset_fg = self.state.colors.c2c(color, [255; 3]);
     }
 
     /// Set the cursor style
@@ -187,12 +171,12 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         style: CursorStyle,
     ) {
-        self.cursor_style = style;
+        self.state.cursor_style = style;
     }
 
     /// Current cursor style.
     pub fn cursor_style(&self) -> CursorStyle {
-        self.cursor_style
+        self.state.cursor_style
     }
 
     /// Set the cursor color.
@@ -200,28 +184,31 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         color: ratatui_core::style::Color,
     ) {
-        self.cursor_color = color;
+        self.state.cursor_color = color;
     }
 
     /// Current cursor color.
     pub fn cursor_color(&self) -> ratatui_core::style::Color {
-        self.cursor_color
+        self.state.cursor_color
     }
 
     /// Map a physical cursor position to a col/row position.
-    pub fn pos_to_cell(&self, pos: (u32, u32)) -> ratatui_core::layout::Position {
+    pub fn pos_to_cell(
+        &self,
+        pos: (u32, u32),
+    ) -> ratatui_core::layout::Position {
         todo!();
     }
 
     /// Get the [`PostProcessor`] associated with this backend.
     pub fn post_processor(&self) -> &dyn PostProcessor {
-        self.post_process.as_ref()
+        self.wgpu_post_process.as_ref()
     }
 
     /// Get a mutable reference to the [`PostProcessor`] associated with this
     /// backend.
     pub fn post_processor_mut(&mut self) -> &mut dyn PostProcessor {
-        self.post_process.as_mut()
+        self.wgpu_post_process.as_mut()
     }
 
     /// Changes the post-processor.
@@ -230,11 +217,11 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         builder: P,
     ) {
         let post_process = builder.compile(
-            &self.device,
-            &self.wgpu_state.text_dest_view,
-            &self.surface_config,
+            &self.wgpu_base.device,
+            &self.wgpu_base.text_dest_view,
+            &self.wgpu_base.surface_config,
         );
-        self.post_process = Box::new(post_process);
+        self.wgpu_post_process = Box::new(post_process);
     }
 
     /// Resize the rendering surface. This should be called e.g. to keep the
@@ -244,26 +231,27 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         width: u32,
         height: u32,
     ) {
-        let limits = self.device.limits();
+        let limits = self.wgpu_base.device.limits();
         let width = width.min(limits.max_texture_dimension_2d);
         let height = height.min(limits.max_texture_dimension_2d);
 
-        if width == self.surface_config.width && height == self.surface_config.height
+        if width == self.wgpu_base.surface_config.width
+            && height == self.wgpu_base.surface_config.height
             || width == 0
             || height == 0
         {
             return;
         }
 
-        self.surface_config.width = width;
-        self.surface_config.height = height;
+        self.wgpu_base.surface_config.width = width;
+        self.wgpu_base.surface_config.height = height;
         self.rebuild_surface();
     }
 
     /// Get the text currently displayed on the screen.
     pub fn get_text(&self) -> String {
         let bounds = self.size().unwrap();
-        self.cells.chunks(bounds.width as usize).fold(
+        self.state.cells.chunks(bounds.width as usize).fold(
             String::with_capacity((bounds.width + 1) as usize * bounds.height as usize),
             |dest, row| {
                 let mut dest = row.iter().fold(dest, |mut dest, s| {
@@ -283,8 +271,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         new_colors: ColorTable,
     ) {
-        self.dirty_rows.clear();
-        self.colors = new_colors;
+        self.state.dirty_rows.clear();
+        self.state.colors = new_colors;
     }
 
     /// Update the fonts used for rendering. This will cause a full repaint of
@@ -293,9 +281,9 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         new_fonts: Fonts<'f>,
     ) {
-        self.dirty_rows.clear();
-        self.cached.match_fonts(&new_fonts);
-        self.fonts = new_fonts;
+        self.state.dirty_rows.clear();
+        self.wgpu_atlas.cached.match_fonts(&new_fonts);
+        self.state.fonts = new_fonts;
 
         self.rebuild_surface();
     }
@@ -309,10 +297,10 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         new_fonts: Vec<Font<'f>>,
     ) {
-        self.fonts.clear_fonts();
-        self.fonts.add_fonts(new_fonts);
-        self.dirty_rows.clear();
-        self.cached.match_fonts(&self.fonts);
+        self.state.fonts.clear_fonts();
+        self.state.fonts.add_fonts(new_fonts);
+        self.state.dirty_rows.clear();
+        self.wgpu_atlas.cached.match_fonts(&self.state.fonts);
 
         self.rebuild_surface();
     }
@@ -323,9 +311,9 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         new_font_size: u32,
     ) {
-        self.dirty_rows.clear();
-        self.fonts.set_size_px(new_font_size);
-        self.cached.match_fonts(&self.fonts);
+        self.state.dirty_rows.clear();
+        self.state.fonts.set_size_px(new_font_size);
+        self.wgpu_atlas.cached.match_fonts(&self.state.fonts);
 
         self.rebuild_surface();
     }
@@ -334,44 +322,63 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     pub fn blink(&mut self) {
         let bounds = self.size().unwrap();
 
-        self.bg_vertices.clear();
-        self.text_vertices.clear();
-        self.text_indices.clear();
+        self.wgpu_vertices.bg_vertices.clear();
+        self.wgpu_vertices.text_vertices.clear();
+        self.wgpu_vertices.text_indices.clear();
 
-        self.blink = self.blink.wrapping_add(1);
-        self.cursor_blink = self.cursor_blink.wrapping_add(1);
+        self.state.blink = self.state.blink.wrapping_add(1);
+        self.state.cursor_blink = self.state.cursor_blink.wrapping_add(1);
 
-        if self.fast_blink_divisor != 0 && self.blink % self.fast_blink_divisor == 0 {
-            self.fast_blink_showing = !self.fast_blink_showing;
+        if self.state.fast_blink_divisor != 0
+            && self.state.blink % self.state.fast_blink_divisor == 0
+        {
+            self.state.fast_blink_showing = !self.state.fast_blink_showing;
         }
-        if self.slow_blink_divisor != 0 && self.blink % self.slow_blink_divisor == 0 {
-            self.slow_blink_showing = !self.slow_blink_showing;
+        if self.state.slow_blink_divisor != 0
+            && self.state.blink % self.state.slow_blink_divisor == 0
+        {
+            self.state.slow_blink_showing = !self.state.slow_blink_showing;
         }
-        if self.cursor_divisor != 0 && self.cursor_blink % self.cursor_divisor == 0 {
-            self.cursor_showing = !self.cursor_showing;
+        if self.state.cursor_divisor != 0
+            && self.state.cursor_blink % self.state.cursor_divisor == 0
+        {
+            self.state.cursor_showing = !self.state.cursor_showing;
         }
 
         let mut index_offset = 0;
 
-        let rendered = mem::take(&mut self.rendered);
         let cell_indexes = self
+            .state
             .fast_blinking
             .iter_ones()
-            .chain(self.slow_blinking.iter_ones())
+            .chain(self.state.slow_blinking.iter_ones())
             .chain(iter::once(
-                self.cursor_view.1 as usize * bounds.width as usize + self.cursor_view.0 as usize,
+                self.state.cursor_view.1 as usize * bounds.width as usize
+                    + self.state.cursor_view.0 as usize,
             ))
             .collect::<Vec<_>>();
         for index in cell_indexes {
-            if let Some(to_render) = rendered.get(index) {
-                self.append_rendered(to_render, &mut index_offset);
+            if let Some(to_render) = self.rendered.get(index) {
+                append_rendered(
+                    &self.state,
+                    to_render,
+                    &mut index_offset,
+                    &mut self.wgpu_vertices,
+                );
             }
         }
-        self.rendered = rendered;
 
-        self.queue.submit([]);
+        self.wgpu_base.queue.submit([]);
 
-        self.render();
+        render(
+            self.window_size().expect("window_size"),
+            self.state.fonts.font_box(),
+            self.state.reset_bg,
+            &self.wgpu_base,
+            &self.wgpu_pipeline,
+            self.wgpu_post_process.as_mut(),
+            &self.wgpu_vertices,
+        );
     }
 }
 
@@ -379,321 +386,328 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     /// Resize the rendering surface. This should be called e.g. to keep the
     /// backend in sync with your window size.
     fn rebuild_surface(&mut self) {
-        let (inset_width, inset_height) = match self.viewport {
+        let (inset_width, inset_height) = match self.state.viewport {
             Viewport::Full => (0, 0),
             Viewport::Shrink { width, height } => (width, height),
         };
 
-        let width = self.surface_config.width;
-        let height = self.surface_config.height;
-        self.surface.configure(&self.device, &self.surface_config);
+        let width = self.wgpu_base.surface_config.width;
+        let height = self.wgpu_base.surface_config.height;
+        self.wgpu_base
+            .surface
+            .configure(&self.wgpu_base.device, &self.wgpu_base.surface_config);
 
         let width = width - inset_width;
         let height = height - inset_height;
 
-        let chars_wide = width / self.fonts.min_width_px();
-        let chars_high = height / self.fonts.height_px();
+        let chars_wide = width / self.state.fonts.min_width_px();
+        let chars_high = height / self.state.fonts.height_px();
 
-        self.cells.clear();
-        self.cell_remap.clear();
+        self.state.cells.clear();
+        self.state.cell_remap.clear();
         self.rendered.clear();
-        self.fast_blinking.clear();
-        self.slow_blinking.clear();
+        self.state.fast_blinking.clear();
+        self.state.slow_blinking.clear();
 
         // This always needs to be cleared because the surface is cleared when it is
         // resized. If we don't re-render the rows, we end up with a blank surface when
         // the resize is less than a character dimension.
-        self.dirty_rows.clear();
+        self.state.dirty_rows.clear();
 
-        self.wgpu_state = build_wgpu_state(
-            &self.device,
-            chars_wide * self.fonts.min_width_px(),
-            chars_high * self.fonts.height_px(),
+        self.wgpu_base.text_dest_view = build_wgpu_state(
+            &self.wgpu_base.device,
+            chars_wide * self.state.fonts.min_width_px(),
+            chars_high * self.state.fonts.height_px(),
         );
 
-        self.post_process.resize(
-            &self.device,
-            &self.wgpu_state.text_dest_view,
-            &self.surface_config,
+        self.wgpu_post_process.resize(
+            &self.wgpu_base.device,
+            &self.wgpu_base.text_dest_view,
+            &self.wgpu_base.surface_config,
         );
     }
+}
 
-    fn append_rendered(
-        &mut self,
-        to_render: &Rendered,
-        index_offset: &mut u32,
-    ) {
-        for (
-            (x, y, _),
-            RenderInfo {
-                cached,
-                fg,
-                bg,
-                modifier,
-                underline_pos_min,
-                underline_pos_max,
-                strikeout_pos_min,
-                strikeout_pos_max,
-                cursor_pos_min,
-                cursor_pos_max,
-            },
-        ) in to_render.iter()
+fn append_rendered(
+    state: &BackendState<'_>,
+    to_render: &Rendered,
+    index_offset: &mut u32,
+    vertices: &mut WgpuVertices,
+) {
+    for (
+        (x, y, _),
+        RenderInfo {
+            cached,
+            fg,
+            bg,
+            modifier,
+            underline_pos_min,
+            underline_pos_max,
+            strikeout_pos_min,
+            strikeout_pos_max,
+            cursor_pos_min,
+            cursor_pos_max,
+        },
+    ) in to_render.iter()
+    {
+        let alpha = if modifier.contains(Modifier::HIDDEN)
+            | (modifier.contains(Modifier::RAPID_BLINK) && !state.fast_blink_showing)
+            | (modifier.contains(Modifier::SLOW_BLINK) && !state.slow_blink_showing)
         {
-            let alpha = if modifier.contains(Modifier::HIDDEN)
-                | (modifier.contains(Modifier::RAPID_BLINK) && !self.fast_blink_showing)
-                | (modifier.contains(Modifier::SLOW_BLINK) && !self.slow_blink_showing)
-            {
-                0
-            } else if modifier.contains(Modifier::DIM) {
-                127
-            } else {
-                255
-            };
-
-            let reverse = modifier.contains(Modifier::REVERSED);
-            let fg_color = if reverse {
-                self.colors.c2c(*bg, self.reset_bg)
-            } else {
-                self.colors.c2c(*fg, self.reset_fg)
-            };
-            let fg_color_u32: u32 =
-                u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], alpha]);
-
-            let cursor_color_u32 = if self.cursor_color != ratatui_core::style::Color::Reset {
-                let cur_color = self.colors.c2c(self.cursor_color, self.reset_fg);
-                u32::from_le_bytes([cur_color[0], cur_color[1], cur_color[2], 99])
-            } else {
-                u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], 99])
-            };
-
-            let bg_color = if reverse {
-                self.colors.c2c(*fg, self.reset_fg)
-            } else {
-                self.colors.c2c(*bg, self.reset_bg)
-            };
-            let bg_color_u32 = u32::from_le_bytes([bg_color[0], bg_color[1], bg_color[2], 255]);
-
-            let underline_pos = ((*underline_pos_min as u32 + cached.y) << 16)
-                | (*underline_pos_max as u32 + cached.y);
-            let strikeout_pos = ((*strikeout_pos_min as u32 + cached.y) << 16)
-                | (*strikeout_pos_max as u32 + cached.y);
-
-            let mut cursor_pos = 0x0000_0000;
-            if self.cursor_visible && self.cursor_showing && cursor_pos_min != cursor_pos_max {
-                match self.cursor_style {
-                    CursorStyle::Block => {
-                        cursor_pos = 0x0002_0000 | cached.width << 8 | 0x0000_0000;
-                        // horizontal
-                    }
-                    CursorStyle::Underscore => {
-                        cursor_pos = 0x0003_0000
-                            | (*cursor_pos_max as u32 + cached.y + 1) << 8
-                            | (*cursor_pos_min as u32 + cached.y);
-                    }
-                    CursorStyle::BoldUnderscore => {
-                        cursor_pos = 0x0003_0000
-                            | (*cursor_pos_max as u32 + cached.y + 3) << 8
-                            | (*cursor_pos_min as u32 + cached.y);
-                    }
-                    CursorStyle::Bar => {
-                        let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
-                        cursor_pos = 0x0002_0000 | (cursor_width + 1) << 8 | 0x0000_0000;
-                    }
-                    CursorStyle::BoldBar => {
-                        let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
-                        cursor_pos = 0x0002_0000 | (cursor_width + 3) << 8 | 0x0000_0000;
-                    }
-                    CursorStyle::RtlBar => {
-                        let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
-                        cursor_pos = 0x0002_0000
-                            | cached.width << 8
-                            | (cached.width.saturating_sub(cursor_width + 1));
-                    }
-                    CursorStyle::RtlBoldBar => {
-                        let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
-                        cursor_pos = 0x0002_0000
-                            | cached.width << 8
-                            | (cached.width.saturating_sub(cursor_width + 3))
-                    }
-                }
-            }
-
-            self.text_indices.push([
-                *index_offset,     // x, y
-                *index_offset + 1, // x + w, y
-                *index_offset + 2, // x, y + h
-                *index_offset + 2, // x, y + h
-                *index_offset + 3, // x + w, y + h
-                *index_offset + 1, // x + w, y
-            ]);
-            *index_offset += 4;
-
-            let x = *x as f32;
-            let y = *y as f32;
-            let width = cached.width as f32;
-            let height = cached.height as f32;
-            let uvx = cached.x as f32;
-            let uvy = cached.y as f32;
-
-            self.bg_vertices.push(TextBgVertexMember {
-                vertex: [x, y],
-                bg_color: bg_color_u32,
-            });
-            self.bg_vertices.push(TextBgVertexMember {
-                vertex: [x + width, y],
-                bg_color: bg_color_u32,
-            });
-            self.bg_vertices.push(TextBgVertexMember {
-                vertex: [x, y + height],
-                bg_color: bg_color_u32,
-            });
-            self.bg_vertices.push(TextBgVertexMember {
-                vertex: [x + width, y + height],
-                bg_color: bg_color_u32,
-            });
-
-            self.text_vertices.push(TextVertexMember {
-                vertex: [x, y],
-                uv: [uvx, uvy],
-                uv_x0: uvx,
-                fg_color: fg_color_u32,
-                underline_pos,
-                strikeout_pos,
-                cursor_pos,
-                cursor_color: cursor_color_u32,
-            });
-            self.text_vertices.push(TextVertexMember {
-                vertex: [x + width, y],
-                uv: [uvx + width, uvy],
-                uv_x0: uvx,
-                fg_color: fg_color_u32,
-                underline_pos,
-                strikeout_pos,
-                cursor_pos,
-                cursor_color: cursor_color_u32,
-            });
-            self.text_vertices.push(TextVertexMember {
-                vertex: [x, y + height],
-                uv: [uvx, uvy + height],
-                uv_x0: uvx,
-                fg_color: fg_color_u32,
-                underline_pos,
-                strikeout_pos,
-                cursor_pos,
-                cursor_color: cursor_color_u32,
-            });
-            self.text_vertices.push(TextVertexMember {
-                vertex: [x + width, y + height],
-                uv: [uvx + width, uvy + height],
-                uv_x0: uvx,
-                fg_color: fg_color_u32,
-                underline_pos,
-                strikeout_pos,
-                cursor_pos,
-                cursor_color: cursor_color_u32,
-            });
-        }
-    }
-
-    fn render(&mut self) {
-        let bounds = self.window_size().unwrap();
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Draw Encoder"),
-            });
-
-        if !self.text_vertices.is_empty() {
-            {
-                let mut uniforms = self
-                    .queue
-                    .write_buffer_with(
-                        &self.text_screen_size_buffer,
-                        0,
-                        NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap(),
-                    )
-                    .unwrap();
-                uniforms.copy_from_slice(bytemuck::cast_slice(&[
-                    bounds.columns_rows.width as f32 * self.fonts.min_width_px() as f32,
-                    bounds.columns_rows.height as f32 * self.fonts.height_px() as f32,
-                    0.0,
-                    0.0,
-                ]));
-            }
-
-            let bg_vertices = self.device.create_buffer_init(&BufferInitDescriptor {
-                label: Some("Text Bg Vertices"),
-                contents: bytemuck::cast_slice(&self.bg_vertices),
-                usage: BufferUsages::VERTEX,
-            });
-
-            let fg_vertices = self.device.create_buffer_init(&BufferInitDescriptor {
-                label: Some("Text Vertices"),
-                contents: bytemuck::cast_slice(&self.text_vertices),
-                usage: BufferUsages::VERTEX,
-            });
-
-            let indices = self.device.create_buffer_init(&BufferInitDescriptor {
-                label: Some("Text Indices"),
-                contents: bytemuck::cast_slice(&self.text_indices),
-                usage: BufferUsages::INDEX,
-            });
-
-            {
-                let mut text_render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                    label: Some("Text Render Pass"),
-                    color_attachments: &[Some(RenderPassColorAttachment {
-                        view: &self.wgpu_state.text_dest_view,
-                        resolve_target: None,
-                        ops: Operations {
-                            load: LoadOp::Load,
-                            store: StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    ..Default::default()
-                });
-
-                text_render_pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-
-                text_render_pass.set_pipeline(&self.text_bg_compositor.pipeline);
-                text_render_pass.set_bind_group(0, &self.text_bg_compositor.fs_uniforms, &[]);
-                text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
-                text_render_pass.draw_indexed(0..(self.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
-
-                text_render_pass.set_pipeline(&self.text_fg_compositor.pipeline);
-                text_render_pass.set_bind_group(0, &self.text_fg_compositor.fs_uniforms, &[]);
-                text_render_pass.set_bind_group(1, &self.text_fg_compositor.atlas_bindings, &[]);
-
-                text_render_pass.set_vertex_buffer(0, fg_vertices.slice(..));
-                text_render_pass.draw_indexed(
-                    0..(self.text_vertices.len() as u32 / 4) * 6,
-                    0,
-                    0..1,
-                );
-            }
-        }
-
-        let Some(texture) = self.surface.get_current_texture() else {
-            return;
+            0
+        } else if modifier.contains(Modifier::DIM) {
+            127
+        } else {
+            255
         };
 
-        let bg_color_u32 =
-            u32::from_le_bytes([self.reset_bg[0], self.reset_bg[1], self.reset_bg[2], 255]);
+        let reverse = modifier.contains(Modifier::REVERSED);
+        let fg_color = if reverse {
+            state.colors.c2c(*bg, state.reset_bg)
+        } else {
+            state.colors.c2c(*fg, state.reset_fg)
+        };
+        let fg_color_u32: u32 = u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], alpha]);
 
-        self.post_process.process(
-            bg_color_u32,
-            &mut encoder,
-            &self.queue,
-            &self.wgpu_state.text_dest_view,
-            &self.surface_config,
-            texture.get_view(),
-        );
+        let cursor_color_u32 = if state.cursor_color != ratatui_core::style::Color::Reset {
+            let cur_color = state.colors.c2c(state.cursor_color, state.reset_fg);
+            u32::from_le_bytes([cur_color[0], cur_color[1], cur_color[2], 99])
+        } else {
+            u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], 99])
+        };
 
-        self.queue.submit(Some(encoder.finish()));
-        texture.present();
+        let bg_color = if reverse {
+            state.colors.c2c(*fg, state.reset_fg)
+        } else {
+            state.colors.c2c(*bg, state.reset_bg)
+        };
+        let bg_color_u32 = u32::from_le_bytes([bg_color[0], bg_color[1], bg_color[2], 255]);
+
+        let underline_pos =
+            ((*underline_pos_min as u32 + cached.y) << 16) | (*underline_pos_max as u32 + cached.y);
+        let strikeout_pos =
+            ((*strikeout_pos_min as u32 + cached.y) << 16) | (*strikeout_pos_max as u32 + cached.y);
+
+        let mut cursor_pos = 0x0000_0000;
+        if state.cursor_visible && state.cursor_showing && cursor_pos_min != cursor_pos_max {
+            match state.cursor_style {
+                CursorStyle::Block => {
+                    cursor_pos = 0x0002_0000 | cached.width << 8 | 0x0000_0000;
+                    // horizontal
+                }
+                CursorStyle::Underscore => {
+                    cursor_pos = 0x0003_0000
+                        | (*cursor_pos_max as u32 + cached.y + 1) << 8
+                        | (*cursor_pos_min as u32 + cached.y);
+                }
+                CursorStyle::BoldUnderscore => {
+                    cursor_pos = 0x0003_0000
+                        | (*cursor_pos_max as u32 + cached.y + 3) << 8
+                        | (*cursor_pos_min as u32 + cached.y);
+                }
+                CursorStyle::Bar => {
+                    let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
+                    cursor_pos = 0x0002_0000 | (cursor_width + 1) << 8 | 0x0000_0000;
+                }
+                CursorStyle::BoldBar => {
+                    let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
+                    cursor_pos = 0x0002_0000 | (cursor_width + 3) << 8 | 0x0000_0000;
+                }
+                CursorStyle::RtlBar => {
+                    let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
+                    cursor_pos = 0x0002_0000
+                        | cached.width << 8
+                        | (cached.width.saturating_sub(cursor_width + 1));
+                }
+                CursorStyle::RtlBoldBar => {
+                    let cursor_width = (*cursor_pos_max).abs_diff(*cursor_pos_min) as u32;
+                    cursor_pos = 0x0002_0000
+                        | cached.width << 8
+                        | (cached.width.saturating_sub(cursor_width + 3))
+                }
+            }
+        }
+
+        vertices.text_indices.push([
+            *index_offset,     // x, y
+            *index_offset + 1, // x + w, y
+            *index_offset + 2, // x, y + h
+            *index_offset + 2, // x, y + h
+            *index_offset + 3, // x + w, y + h
+            *index_offset + 1, // x + w, y
+        ]);
+        *index_offset += 4;
+
+        let x = *x as f32;
+        let y = *y as f32;
+        let width = cached.width as f32;
+        let height = cached.height as f32;
+        let uvx = cached.x as f32;
+        let uvy = cached.y as f32;
+
+        vertices.bg_vertices.push(TextBgVertexMember {
+            vertex: [x, y],
+            bg_color: bg_color_u32,
+        });
+        vertices.bg_vertices.push(TextBgVertexMember {
+            vertex: [x + width, y],
+            bg_color: bg_color_u32,
+        });
+        vertices.bg_vertices.push(TextBgVertexMember {
+            vertex: [x, y + height],
+            bg_color: bg_color_u32,
+        });
+        vertices.bg_vertices.push(TextBgVertexMember {
+            vertex: [x + width, y + height],
+            bg_color: bg_color_u32,
+        });
+
+        vertices.text_vertices.push(TextVertexMember {
+            vertex: [x, y],
+            uv: [uvx, uvy],
+            uv_x0: uvx,
+            fg_color: fg_color_u32,
+            underline_pos,
+            strikeout_pos,
+            cursor_pos,
+            cursor_color: cursor_color_u32,
+        });
+        vertices.text_vertices.push(TextVertexMember {
+            vertex: [x + width, y],
+            uv: [uvx + width, uvy],
+            uv_x0: uvx,
+            fg_color: fg_color_u32,
+            underline_pos,
+            strikeout_pos,
+            cursor_pos,
+            cursor_color: cursor_color_u32,
+        });
+        vertices.text_vertices.push(TextVertexMember {
+            vertex: [x, y + height],
+            uv: [uvx, uvy + height],
+            uv_x0: uvx,
+            fg_color: fg_color_u32,
+            underline_pos,
+            strikeout_pos,
+            cursor_pos,
+            cursor_color: cursor_color_u32,
+        });
+        vertices.text_vertices.push(TextVertexMember {
+            vertex: [x + width, y + height],
+            uv: [uvx + width, uvy + height],
+            uv_x0: uvx,
+            fg_color: fg_color_u32,
+            underline_pos,
+            strikeout_pos,
+            cursor_pos,
+            cursor_color: cursor_color_u32,
+        });
     }
+}
+
+fn render(
+    bounds: WindowSize,
+    font_box: FontBox,
+    reset_bg: Rgb,
+    base: &WgpuBase,
+    pipeline: &WgpuPipeline,
+    post_process: &mut dyn PostProcessor,
+    vertices: &WgpuVertices,
+) {
+    let mut encoder = base
+        .device
+        .create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Draw Encoder"),
+        });
+
+    if !vertices.text_vertices.is_empty() {
+        {
+            let mut uniforms = base
+                .queue
+                .write_buffer_with(
+                    &pipeline.text_screen_size_buffer,
+                    0,
+                    NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap(),
+                )
+                .unwrap();
+            uniforms.copy_from_slice(bytemuck::cast_slice(&[
+                bounds.columns_rows.width as f32 * font_box.width as f32,
+                bounds.columns_rows.height as f32 * font_box.height as f32,
+                0.0,
+                0.0,
+            ]));
+        }
+
+        let bg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Text Bg Vertices"),
+            contents: bytemuck::cast_slice(&vertices.bg_vertices),
+            usage: BufferUsages::VERTEX,
+        });
+
+        let fg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Text Vertices"),
+            contents: bytemuck::cast_slice(&vertices.text_vertices),
+            usage: BufferUsages::VERTEX,
+        });
+
+        let indices = base.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Text Indices"),
+            contents: bytemuck::cast_slice(&vertices.text_indices),
+            usage: BufferUsages::INDEX,
+        });
+
+        {
+            let mut text_render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Text Render Pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &base.text_dest_view,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                ..Default::default()
+            });
+
+            text_render_pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
+
+            text_render_pass.set_pipeline(&pipeline.text_bg_compositor.pipeline);
+            text_render_pass.set_bind_group(0, &pipeline.text_bg_compositor.fs_uniforms, &[]);
+            text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
+            text_render_pass.draw_indexed(0..(vertices.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
+
+            text_render_pass.set_pipeline(&pipeline.text_fg_compositor.pipeline);
+            text_render_pass.set_bind_group(0, &pipeline.text_fg_compositor.fs_uniforms, &[]);
+            text_render_pass.set_bind_group(1, &pipeline.text_fg_compositor.atlas_bindings, &[]);
+
+            text_render_pass.set_vertex_buffer(0, fg_vertices.slice(..));
+            text_render_pass.draw_indexed(
+                0..(vertices.text_vertices.len() as u32 / 4) * 6,
+                0,
+                0..1,
+            );
+        }
+    }
+
+    let Some(texture) = base.surface.get_current_texture() else {
+        return;
+    };
+
+    let bg_color_u32 = u32::from_le_bytes([reset_bg[0], reset_bg[1], reset_bg[2], 255]);
+
+    post_process.process(
+        bg_color_u32,
+        &mut encoder,
+        &base.queue,
+        &base.text_dest_view,
+        &base.surface_config,
+        texture.get_view(),
+    );
+
+    base.queue.submit(Some(encoder.finish()));
+    texture.present();
 }
 
 impl<'s> Backend for WgpuBackend<'_, 's> {
@@ -706,55 +720,61 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     {
         let bounds = self.size()?;
 
-        self.cells
+        self.state
+            .cells
             .resize(bounds.height as usize * bounds.width as usize, Cell::EMPTY);
-        self.cell_remap
+        self.state
+            .cell_remap
             .resize(bounds.height as usize * bounds.width as usize, 0);
         self.rendered.resize_with(
             bounds.height as usize * bounds.width as usize,
             Rendered::default,
         );
-        self.fast_blinking
+        self.state
+            .fast_blinking
             .resize(bounds.height as usize * bounds.width as usize, false);
-        self.slow_blinking
+        self.state
+            .slow_blinking
             .resize(bounds.height as usize * bounds.width as usize, false);
-        self.dirty_rows.resize(bounds.height as usize, true);
+        self.state.dirty_rows.resize(bounds.height as usize, true);
 
         for (x, y, cell) in content {
             let offset = y as usize * bounds.width as usize;
             let index = offset + x as usize;
 
-            self.fast_blinking
+            self.state
+                .fast_blinking
                 .set(index, cell.modifier.contains(Modifier::RAPID_BLINK));
-            self.slow_blinking
+            self.state
+                .slow_blinking
                 .set(index, cell.modifier.contains(Modifier::SLOW_BLINK));
 
-            for i in 1..self.cells[index].symbol().width() {
-                self.cells[index + i] = ONE_CELL;
+            for i in 1..self.state.cells[index].symbol().width() {
+                self.state.cells[index + i] = ONE_CELL;
             }
-            self.cells[index] = cell.clone();
-            for i in 1..self.cells[index].symbol().width() {
-                self.cells[index + i] = NULL_CELL;
+            self.state.cells[index] = cell.clone();
+            for i in 1..self.state.cells[index].symbol().width() {
+                self.state.cells[index + i] = NULL_CELL;
             }
 
-            self.dirty_rows.set(y as usize, true);
+            self.state.dirty_rows.set(y as usize, true);
         }
 
         Ok(())
     }
 
     fn hide_cursor(&mut self) -> std::io::Result<()> {
-        self.cursor_visible = false;
+        self.state.cursor_visible = false;
         Ok(())
     }
 
     fn show_cursor(&mut self) -> std::io::Result<()> {
-        self.cursor_visible = true;
+        self.state.cursor_visible = true;
         Ok(())
     }
 
     fn get_cursor_position(&mut self) -> std::io::Result<Position> {
-        Ok(Position::new(self.cursor.0, self.cursor.1))
+        Ok(Position::new(self.state.cursor.0, self.state.cursor.1))
     }
 
     fn set_cursor_position<Pos: Into<Position>>(
@@ -763,50 +783,52 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     ) -> std::io::Result<()> {
         let bounds = self.size()?;
         let pos: Position = position.into();
-        self.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
-        self.cursor_view = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1)); // TODO
-        self.dirty_rows.set(self.cursor.1 as usize, true);
+        self.state.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
+        self.state.cursor_view = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1)); // TODO
+        self.state
+            .dirty_rows
+            .set(self.state.cursor.1 as usize, true);
         Ok(())
     }
 
     fn clear(&mut self) -> std::io::Result<()> {
-        self.cells.clear();
-        self.dirty_rows.clear();
+        self.state.cells.clear();
+        self.state.dirty_rows.clear();
         self.rendered.clear();
-        self.fast_blinking.clear();
-        self.slow_blinking.clear();
-        self.cursor = (0, 0);
-        self.cursor_view = (0, 0);
+        self.state.fast_blinking.clear();
+        self.state.slow_blinking.clear();
+        self.state.cursor = (0, 0);
+        self.state.cursor_view = (0, 0);
 
         Ok(())
     }
 
     fn size(&self) -> std::io::Result<Size> {
-        let (inset_width, inset_height) = match self.viewport {
+        let (inset_width, inset_height) = match self.state.viewport {
             Viewport::Full => (0, 0),
             Viewport::Shrink { width, height } => (width, height),
         };
-        let width = self.surface_config.width - inset_width;
-        let height = self.surface_config.height - inset_height;
+        let width = self.wgpu_base.surface_config.width - inset_width;
+        let height = self.wgpu_base.surface_config.height - inset_height;
 
         Ok(Size {
-            width: (width / self.fonts.min_width_px()) as u16,
-            height: (height / self.fonts.height_px()) as u16,
+            width: (width / self.state.fonts.min_width_px()) as u16,
+            height: (height / self.state.fonts.height_px()) as u16,
         })
     }
 
     fn window_size(&mut self) -> std::io::Result<WindowSize> {
-        let (inset_width, inset_height) = match self.viewport {
+        let (inset_width, inset_height) = match self.state.viewport {
             Viewport::Full => (0, 0),
             Viewport::Shrink { width, height } => (width, height),
         };
-        let width = self.surface_config.width - inset_width;
-        let height = self.surface_config.height - inset_height;
+        let width = self.wgpu_base.surface_config.width - inset_width;
+        let height = self.wgpu_base.surface_config.height - inset_height;
 
         Ok(WindowSize {
             columns_rows: Size {
-                width: (width / self.fonts.min_width_px()) as u16,
-                height: (height / self.fonts.height_px()) as u16,
+                width: (width / self.state.fonts.min_width_px()) as u16,
+                height: (height / self.state.fonts.height_px()) as u16,
             },
             pixels: Size {
                 width: width as u16,
@@ -819,13 +841,13 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let bounds = self.size()?;
 
         // always show cursor on flush.
-        self.cursor_showing = true;
+        self.state.cursor_showing = true;
         // reset blink, removes flickering.
-        self.cursor_blink = 0;
+        self.state.cursor_blink = 0;
 
         let mut pending_cache_updates = HashMap::<_, _, RandomState>::default();
-        for (y, row) in self.cells.chunks(bounds.width as usize).enumerate() {
-            if !self.dirty_rows[y] {
+        for (y, row) in self.state.cells.chunks(bounds.width as usize).enumerate() {
+            if !self.state.dirty_rows[y] {
                 continue;
             }
 
@@ -848,9 +870,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     );
                 }
 
-                self.cell_remap[row_offset + idx] = idx as u16;
+                self.state.cell_remap[row_offset + idx] = idx as u16;
 
-                fontmap.push(self.fonts.font_for_cell(cell));
+                fontmap.push(self.state.fonts.font_for_cell(cell));
             }
 
             // rebuild from scratch
@@ -866,7 +888,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                              buffer: GlyphBuffer|
              -> UnicodeBuffer {
                 let metrics = font.font();
-                let advance_scale = self.fonts.scale();
+                let advance_scale = self.state.fonts.scale();
 
                 let mut x = 0;
                 let mut chars_wide = 1;
@@ -887,7 +909,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     let mut first_glyph = false;
                     if last_cell_idx != Some(cell_idx) {
                         x = cell_remap[row_offset + cell_idx] as i32
-                            * self.fonts.min_width_px() as i32;
+                            * self.state.fonts.min_width_px() as i32;
                         chars_wide = cell.symbol().width().max(1);
                         last_advance = 0;
                         first_glyph = true;
@@ -905,7 +927,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
                     let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
 
-                    let basey = y as i32 * self.fonts.height_px() as i32
+                    let basey = y as i32 * self.state.fonts.height_px() as i32
                         + (position.y_offset as f32 * advance_scale) as i32;
 
                     let mut basex = x + glyph_offset;
@@ -939,28 +961,28 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         font: font.id(),
                     };
 
-                    let cached = self.cached.get(
+                    let cached = self.wgpu_atlas.cached.get(
                         &key,
-                        chars_wide as u32 * self.fonts.min_width_px(),
-                        self.fonts.height_px(),
+                        chars_wide as u32 * self.state.fonts.min_width_px(),
+                        self.state.fonts.height_px(),
                     );
 
                     let cursor_pos = if first_glyph
-                        && self.cursor_visible
-                        && (cell_idx as u16, y as u16) == self.cursor
+                        && self.state.cursor_visible
+                        && (cell_idx as u16, y as u16) == self.state.cursor
                     {
-                        font.underline(self.fonts.height_px(), cached.height)
+                        font.underline(self.state.fonts.height_px(), cached.height)
                     } else {
                         (0, 0)
                     };
 
                     let underline_pos = if key.style.contains(Modifier::UNDERLINED) {
-                        font.underline(self.fonts.height_px(), cached.height)
+                        font.underline(self.state.fonts.height_px(), cached.height)
                     } else {
                         (0, 0)
                     };
                     let strikeout_pos = if key.style.contains(Modifier::CROSSED_OUT) {
-                        font.strikeout(self.fonts.height_px(), cached.height)
+                        font.strikeout(self.state.fonts.height_px(), cached.height)
                     } else {
                         (0, 0)
                     };
@@ -1000,7 +1022,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             fake_italic & !is_emoji,
                             fake_bold,
                             advance_scale,
-                            self.fonts.ascender(),
+                            self.state.fonts.ascender(),
                             is_emoji,
                             is_fallback,
                         );
@@ -1043,7 +1065,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         let mut buffer = mem::take(&mut self.tmp_buffer);
 
                         self.tmp_buffer = shape(
-                            &self.cell_remap,
+                            &self.state.cell_remap,
                             current_font,
                             current_fake_bold,
                             current_fake_italic,
@@ -1059,12 +1081,12 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     if level.is_rtl() {
                         let view_idx = (max_cell_idx - (cell_idx - min_cell_idx)) as u16;
 
-                        if (cell_idx as u16, y as u16) == self.cursor {
-                            self.cursor_view = (view_idx, y as u16);
-                            self.cursor_style = self.cursor_style.to_rtl();
+                        if (cell_idx as u16, y as u16) == self.state.cursor {
+                            self.state.cursor_view = (view_idx, y as u16);
+                            self.state.cursor_style = self.state.cursor_style.to_rtl();
                         }
 
-                        self.cell_remap[row_offset + cell_idx] = view_idx;
+                        self.state.cell_remap[row_offset + cell_idx] = view_idx;
                     }
 
                     self.tmp_buffer.add(ch, (range.start + idx) as u32);
@@ -1079,7 +1101,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
             let mut buffer = mem::take(&mut self.tmp_buffer);
             self.tmp_buffer = shape(
-                &self.cell_remap,
+                &self.state.cell_remap,
                 current_font,
                 current_fake_bold,
                 current_fake_italic,
@@ -1094,9 +1116,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
         // cache glyphs
         for (_, (cached, image, colored)) in pending_cache_updates {
-            self.queue.write_texture(
+            self.wgpu_base.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &self.text_cache,
+                    texture: &self.wgpu_atlas.text_cache,
                     mip_level: 0,
                     origin: Origin3d {
                         x: cached.x,
@@ -1118,9 +1140,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 },
             );
 
-            self.queue.write_texture(
+            self.wgpu_base.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &self.text_mask,
+                    texture: &self.wgpu_atlas.text_mask,
                     mip_level: 0,
                     origin: Origin3d {
                         x: cached.x,
@@ -1143,30 +1165,43 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             )
         }
 
-        if self.post_process.needs_update() || self.dirty_rows.any() {
-            self.bg_vertices.clear();
-            self.text_vertices.clear();
-            self.text_indices.clear();
+        if self.wgpu_post_process.needs_update() || self.state.dirty_rows.any() {
+            self.wgpu_vertices.bg_vertices.clear();
+            self.wgpu_vertices.text_vertices.clear();
+            self.wgpu_vertices.text_indices.clear();
 
             let mut index_offset = 0;
-            let rendered = mem::take(&mut self.rendered);
-            let dirty_rows = mem::take(&mut self.dirty_rows);
-            for row in dirty_rows.iter_ones() {
+            for row in self.state.dirty_rows.iter_ones() {
                 let row_index = row * bounds.width as usize;
                 for col_index in 0..bounds.width as usize {
                     let index = row_index + col_index;
 
-                    let to_render = &rendered[index];
-                    self.append_rendered(to_render, &mut index_offset);
+                    let to_render = &self.rendered[index];
+                    append_rendered(
+                        &self.state,
+                        to_render,
+                        &mut index_offset,
+                        &mut self.wgpu_vertices,
+                    );
                 }
             }
-            self.rendered = rendered;
-            self.dirty_rows = dirty_rows;
 
-            self.dirty_rows.iter_mut().for_each(|mut v| *v = false);
+            self.state
+                .dirty_rows
+                .iter_mut()
+                .for_each(|mut v| *v = false);
 
-            self.queue.submit([]);
-            self.render();
+            self.wgpu_base.queue.submit([]);
+
+            render(
+                self.window_size().expect("window_size"),
+                self.state.fonts.font_box(),
+                self.state.reset_bg,
+                &self.wgpu_base,
+                &self.wgpu_pipeline,
+                self.wgpu_post_process.as_mut(),
+                &self.wgpu_vertices,
+            );
         }
 
         Ok(())
@@ -1177,26 +1212,26 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         clear_type: ClearType,
     ) -> std::io::Result<()> {
         let bounds = self.size()?;
-        let line_start = self.cursor.1 as usize * bounds.width as usize;
-        let idx = line_start + self.cursor.0 as usize;
+        let line_start = self.state.cursor.1 as usize * bounds.width as usize;
+        let idx = line_start + self.state.cursor.0 as usize;
 
         match clear_type {
             ClearType::All => self.clear(),
             ClearType::AfterCursor => {
-                self.cells.truncate(idx + 1);
+                self.state.cells.truncate(idx + 1);
                 Ok(())
             }
             ClearType::BeforeCursor => {
-                self.cells[..idx].fill(Cell::EMPTY);
+                self.state.cells[..idx].fill(Cell::EMPTY);
                 Ok(())
             }
             ClearType::CurrentLine => {
-                self.cells[line_start..line_start + bounds.width as usize].fill(Cell::EMPTY);
+                self.state.cells[line_start..line_start + bounds.width as usize].fill(Cell::EMPTY);
                 Ok(())
             }
             ClearType::UntilNewLine => {
-                let remain = (bounds.width - self.cursor.0) as usize;
-                self.cells[idx..idx + remain].fill(Cell::EMPTY);
+                let remain = (bounds.width - self.state.cursor.0) as usize;
+                self.state.cells[idx..idx + remain].fill(Cell::EMPTY);
                 Ok(())
             }
         }
@@ -1775,10 +1810,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -1791,6 +1826,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,
@@ -1844,10 +1880,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -1860,6 +1896,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,
@@ -1912,10 +1949,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -1928,6 +1965,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,
@@ -1984,10 +2022,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -2000,6 +2038,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,
@@ -2060,10 +2099,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -2076,6 +2115,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,
@@ -2128,10 +2168,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -2144,6 +2184,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,
@@ -2176,10 +2217,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -2192,6 +2233,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,
@@ -2244,10 +2286,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -2260,6 +2302,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,
@@ -2313,10 +2356,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -2329,6 +2372,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,
@@ -2382,10 +2426,10 @@ mod tests {
             })
             .unwrap();
 
-        let surface = &terminal.backend().surface;
+        let surface = &terminal.backend().wgpu_base.surface;
         tex2buffer(
-            &terminal.backend().device,
-            &terminal.backend().queue,
+            &terminal.backend().wgpu_base.device,
+            &terminal.backend().wgpu_base.queue,
             surface,
         );
         let surface = surface.headless().expect("headless");
@@ -2398,6 +2442,7 @@ mod tests {
             });
             terminal
                 .backend()
+                .wgpu_base
                 .device
                 .poll(PollType::Wait {
                     submission_index: None,

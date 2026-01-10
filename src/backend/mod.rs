@@ -3,7 +3,7 @@ pub(crate) mod wgpu_backend;
 
 use std::num::NonZeroU32;
 
-use wgpu::Adapter;
+use crate::utils::text_atlas::Atlas;
 use wgpu::BindGroup;
 use wgpu::CommandEncoder;
 use wgpu::Device;
@@ -19,6 +19,7 @@ use wgpu::TextureFormat;
 use wgpu::TextureUsages;
 use wgpu::TextureView;
 use wgpu::TextureViewDescriptor;
+use wgpu::{Adapter, Buffer, Texture};
 
 pub trait PostProcessorBuilder {
     /// Resulting postprocessor.
@@ -107,9 +108,7 @@ pub(crate) enum RenderTarget {
         view: TextureView,
     },
     #[cfg(test)]
-    Headless {
-        view: TextureView,
-    },
+    Headless { view: TextureView },
 }
 
 pub(crate) enum RenderSurface<'s> {
@@ -324,15 +323,37 @@ struct TextCacheFgPipeline {
     atlas_bindings: BindGroup,
 }
 
-struct WgpuState {
+struct WgpuBase<'s> {
+    surface: RenderSurface<'s>,
+    surface_config: SurfaceConfiguration,
+    device: Device,
+    queue: Queue,
     text_dest_view: TextureView,
+}
+
+struct WgpuAtlas {
+    cached: Atlas,
+    text_cache: Texture,
+    text_mask: Texture,
+}
+
+struct WgpuVertices {
+    pub(super) bg_vertices: Vec<TextBgVertexMember>,
+    pub(super) text_indices: Vec<[u32; 6]>,
+    pub(super) text_vertices: Vec<TextVertexMember>,
+}
+
+struct WgpuPipeline {
+    text_screen_size_buffer: Buffer,
+    text_bg_compositor: TextCacheBgPipeline,
+    text_fg_compositor: TextCacheFgPipeline,
 }
 
 fn build_wgpu_state(
     device: &Device,
     drawable_width: u32,
     drawable_height: u32,
-) -> WgpuState {
+) -> TextureView {
     let text_dest = device.create_texture(&TextureDescriptor {
         label: Some("Text Compositor Out"),
         size: Extent3d {
@@ -350,5 +371,5 @@ fn build_wgpu_state(
 
     let text_dest_view = text_dest.create_view(&TextureViewDescriptor::default());
 
-    WgpuState { text_dest_view }
+    text_dest_view
 }
