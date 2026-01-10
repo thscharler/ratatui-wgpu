@@ -506,13 +506,9 @@ where
             adapter.limits()
         };
 
-        let features = Features::BUFFER_BINDING_ARRAY
-            | Features::VERTEX_WRITABLE_STORAGE
-            | Features::STORAGE_RESOURCE_BINDING_ARRAY;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_limits: limits.clone(),
-                required_features: features,
                 ..Default::default()
             })
             .await
@@ -632,6 +628,7 @@ where
 
         Ok(WgpuBackend {
             cells: vec![],
+            cell_remap: vec![],
             dirty_rows: BitVec::new(),
             rendered: vec![],
             fast_blinking: BitVec::new(),
@@ -643,7 +640,6 @@ where
             tmp_buffer: UnicodeBuffer::new(),
             tmp_text: String::new(),
             tmp_text_to_cell: vec![],
-            tmp_cell_to_visible: vec![],
 
             surface,
             surface_config,
