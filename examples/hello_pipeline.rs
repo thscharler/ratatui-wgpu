@@ -3,13 +3,13 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use ratatui_core::terminal::Terminal;
-use ratatui_widgets::block::Block;
-use ratatui_widgets::paragraph::{Paragraph, Wrap};
 use ratatui_wgpu::Dimensions;
 use ratatui_wgpu::Font;
 use ratatui_wgpu::PostProcessor;
 use ratatui_wgpu::WgpuBackend;
 use ratatui_wgpu::{Builder, PostProcessorBuilder};
+use ratatui_widgets::block::Block;
+use ratatui_widgets::paragraph::{Paragraph, Wrap};
 use wgpu::*;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -242,6 +242,15 @@ impl PostProcessorBuilder for PipelineBuilder {
 }
 
 impl PostProcessor for Pipeline {
+    fn map_to_cell(
+        &self,
+        _scr_x: u32,
+        _scr_y: u32,
+        _font_box: ratatui_wgpu::FontBox,
+    ) -> (u16, u16) {
+        todo!()
+    }
+
     fn resize(
         &mut self,
         device: &wgpu::Device,
