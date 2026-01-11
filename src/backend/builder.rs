@@ -610,7 +610,7 @@ where
             .compile(&device, &wgpu_view, &surface_config);
 
         Ok(WgpuBackend {
-            state: BackendState { fonts: self.fonts },
+            fonts: self.fonts,
             tui_surface: TuiSurface {
                 cells: vec![],
                 cell_remap: vec![],

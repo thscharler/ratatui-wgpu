@@ -112,11 +112,6 @@ pub(crate) struct TuiSurface {
     pub(super) reset_bg: Rgb,
 }
 
-pub(crate) struct BackendState<'f> {
-    // backend state flags
-    pub(super) fonts: Fonts<'f>,
-}
-
 /// A ratatui backend leveraging wgpu for rendering.
 ///
 /// Constructed using a [`Builder`](crate::Builder).
@@ -130,8 +125,9 @@ pub(crate) struct BackendState<'f> {
 /// - No builtin accessibilty, although [`WgpuBackend::get_text`] is provided to
 ///   access the screen's contents.
 pub struct WgpuBackend<'f, 's> {
+    pub(super) fonts: Fonts<'f>,
+
     // ratatui state
-    pub(super) state: BackendState<'f>,
     pub(super) tui_surface: TuiSurface,
 
     // positioned glyphs.
@@ -247,7 +243,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.wgpu_base.surface_config.height = height;
 
         rebuild_surface(
-            self.state.fonts.font_box(),
+            self.fonts.font_box(),
             &mut self.tui_surface,
             &mut self.rendered,
             &mut self.wgpu_base,
@@ -288,12 +284,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         new_fonts: Fonts<'f>,
     ) {
+        self.fonts = new_fonts;
         self.tui_surface.dirty_rows.clear();
-        self.wgpu_atlas.cached.match_fonts(&new_fonts);
-        self.state.fonts = new_fonts;
+        self.wgpu_atlas.cached.match_fonts(&self.fonts);
+
 
         rebuild_surface(
-            self.state.fonts.font_box(),
+            self.fonts.font_box(),
             &mut self.tui_surface,
             &mut self.rendered,
             &mut self.wgpu_base,
@@ -310,13 +307,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         new_fonts: Vec<Font<'f>>,
     ) {
-        self.state.fonts.clear_fonts();
-        self.state.fonts.add_fonts(new_fonts);
+        self.fonts.clear_fonts();
+        self.fonts.add_fonts(new_fonts);
         self.tui_surface.dirty_rows.clear();
-        self.wgpu_atlas.cached.match_fonts(&self.state.fonts);
+        self.wgpu_atlas.cached.match_fonts(&self.fonts);
 
         rebuild_surface(
-            self.state.fonts.font_box(),
+            self.fonts.font_box(),
             &mut self.tui_surface,
             &mut self.rendered,
             &mut self.wgpu_base,
@@ -331,11 +328,11 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         new_font_size: u32,
     ) {
         self.tui_surface.dirty_rows.clear();
-        self.state.fonts.set_size_px(new_font_size);
-        self.wgpu_atlas.cached.match_fonts(&self.state.fonts);
+        self.fonts.set_size_px(new_font_size);
+        self.wgpu_atlas.cached.match_fonts(&self.fonts);
 
         rebuild_surface(
-            self.state.fonts.font_box(),
+            self.fonts.font_box(),
             &mut self.tui_surface,
             &mut self.rendered,
             &mut self.wgpu_base,
@@ -397,7 +394,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 
         render(
             self.window_size().expect("window_size"),
-            self.state.fonts.font_box(),
+            self.fonts.font_box(),
             self.tui_surface.reset_bg,
             &self.wgpu_base,
             &self.wgpu_pipeline,
@@ -835,23 +832,25 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     }
 
     fn size(&self) -> std::io::Result<Size> {
+        let font_box = self.fonts.font_box();
         let width = self.wgpu_base.surface_config.width;
         let height = self.wgpu_base.surface_config.height;
 
         Ok(Size {
-            width: (width / self.state.fonts.min_width_px()) as u16,
-            height: (height / self.state.fonts.height_px()) as u16,
+            width: (width / font_box.width) as u16,
+            height: (height / font_box.height) as u16,
         })
     }
 
     fn window_size(&mut self) -> std::io::Result<WindowSize> {
+        let font_box = self.fonts.font_box();
         let width = self.wgpu_base.surface_config.width;
         let height = self.wgpu_base.surface_config.height;
 
         Ok(WindowSize {
             columns_rows: Size {
-                width: (width / self.state.fonts.min_width_px()) as u16,
-                height: (height / self.state.fonts.height_px()) as u16,
+                width: (width / font_box.width) as u16,
+                height: (height / font_box.height) as u16,
             },
             pixels: Size {
                 width: width as u16,
@@ -899,7 +898,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                 self.tui_surface.cell_remap[row_offset + cell_idx] = cell_idx as u16;
 
-                fontmap.push(self.state.fonts.font_for_cell(cell));
+                fontmap.push(self.fonts.font_for_cell(cell));
             }
 
             // rebuild from scratch
@@ -950,7 +949,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                                 buffer,
                             ),
                             RenderedFont {
-                                font_box: self.state.fonts.font_box(),
+                                font_box: self.fonts.font_box(),
                                 font: current_font,
                                 fake_bold: current_fake_bold,
                                 fake_italic: current_fake_italic,
@@ -1002,7 +1001,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     buffer,
                 ),
                 RenderedFont {
-                    font_box: self.state.fonts.font_box(),
+                    font_box: self.fonts.font_box(),
                     font: current_font,
                     fake_bold: current_fake_bold,
                     fake_italic: current_fake_italic,
@@ -1045,7 +1044,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
             render(
                 self.window_size().expect("window_size"),
-                self.state.fonts.font_box(),
+                self.fonts.font_box(),
                 self.tui_surface.reset_bg,
                 &self.wgpu_base,
                 &self.wgpu_pipeline,
