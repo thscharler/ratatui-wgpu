@@ -39,9 +39,9 @@ use std::num::NonZeroU64;
 use std::{iter, mem};
 use unicode_bidi::Level;
 use unicode_bidi::ParagraphBidiInfo;
-use unicode_properties::GeneralCategoryGroup;
 use unicode_properties::UnicodeEmoji;
 use unicode_properties::UnicodeGeneralCategory;
+use unicode_properties::{GeneralCategory, GeneralCategoryGroup};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
@@ -91,7 +91,6 @@ pub(crate) struct TuiSurface {
     pub(super) slow_blinking: BitVec,
 
     pub(super) cursor: (u16, u16),
-    pub(super) cursor_view: (u16, u16),
     pub(super) cursor_color: ratatui_core::style::Color,
     pub(super) cursor_style: CursorStyle,
     pub(super) cursor_visible: bool,
@@ -691,7 +690,6 @@ fn flush_tui(
                     let view_idx = (max_cell_idx - (cell_idx - min_cell_idx)) as u16;
 
                     if (cell_idx as u16, row_idx as u16) == tui_surface.cursor {
-                        tui_surface.cursor_view = (view_idx, row_idx as u16);
                         tui_surface.cursor_style = tui_surface.cursor_style.to_rtl();
                     }
 
@@ -776,8 +774,7 @@ fn flush_blink(
         .iter_ones()
         .chain(tui_surface.slow_blinking.iter_ones())
         .chain(iter::once(
-            tui_surface.cursor_view.1 as usize * bounds.width as usize
-                + tui_surface.cursor_view.0 as usize,
+            tui_surface.cursor.1 as usize * bounds.width as usize + tui_surface.cursor.0 as usize,
         ))
         .collect::<Vec<_>>();
     for index in cell_indexes {
@@ -1047,7 +1044,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let pos = position.into();
 
         self.tui_surface.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
-        self.tui_surface.cursor_view = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
         self.tui_surface
             .dirty_rows
             .set(self.tui_surface.cursor.1 as usize, true);
@@ -1062,7 +1058,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         self.tui_surface.fast_blinking.clear();
         self.tui_surface.slow_blinking.clear();
         self.tui_surface.cursor = (0, 0);
-        self.tui_surface.cursor_view = (0, 0);
 
         Ok(())
     }
@@ -1212,7 +1207,11 @@ fn shape(
             .chars()
             .next()
             .unwrap_or_default();
-        let ch_category = ch.general_category_group();
+        let ch_category = ch.general_category();
+
+        if ch_category == GeneralCategory::Format {
+            continue;
+        }
 
         // Every cell has it's defined position on the grid.
         // This position is used as a starting point from which
@@ -1225,12 +1224,21 @@ fn shape(
             last_advance = 0;
             first_glyph = true;
         } else {
-            chars_wide = ch.width().unwrap_or(default_chars_wide);
+            chars_wide = ch
+                .width()
+                .unwrap_or(default_chars_wide)
+                .max(default_chars_wide);
         }
 
         // if we have a combining '.undef'. skip it completely.
         if last_cell_idx == Some(cell_idx) {
-            if ch_category == GeneralCategoryGroup::Mark && info.glyph_id == 0 {
+            if matches!(
+                ch_category,
+                GeneralCategory::NonspacingMark
+                    | GeneralCategory::SpacingMark
+                    | GeneralCategory::EnclosingMark
+            ) && info.glyph_id == 0
+            {
                 continue;
             }
         }

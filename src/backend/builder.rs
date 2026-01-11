@@ -1,4 +1,4 @@
-use crate::backend::wgpu_backend::{ TuiSurface, WgpuBackend};
+use crate::backend::wgpu_backend::{TuiSurface, WgpuBackend};
 use crate::backend::TextCacheFgPipeline;
 use crate::backend::TextVertexMember;
 use crate::backend::{build_wgpu_state, PostProcessorBuilder};
@@ -614,7 +614,6 @@ where
                 fast_blinking: Default::default(),
                 slow_blinking: Default::default(),
                 cursor: (0, 0),
-                cursor_view: (0, 0),
                 colors: self.colors,
                 reset_fg,
                 reset_bg,
