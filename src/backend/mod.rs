@@ -89,19 +89,6 @@ impl From<(NonZeroU32, NonZeroU32)> for Dimensions {
     }
 }
 
-/// Controls the area the text is rendered to relative to the presentation
-/// surface.
-#[derive(Clone, Copy, Debug, Default)]
-#[non_exhaustive]
-pub enum Viewport {
-    /// Render to the entire surface.
-    #[default]
-    Full,
-    /// Render to a reduced area starting at the top right and rendering up to
-    /// the bottom left - (width, height).
-    Shrink { width: u32, height: u32 },
-}
-
 pub(crate) enum RenderTarget {
     Surface {
         texture: SurfaceTexture,

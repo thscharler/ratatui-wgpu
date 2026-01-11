@@ -1,7 +1,6 @@
 use crate::backend::build_wgpu_state;
 use crate::backend::TextBgVertexMember;
 use crate::backend::TextVertexMember;
-use crate::backend::Viewport;
 use crate::backend::{PostProcessor, WgpuAtlas, WgpuBase, WgpuPipeline, WgpuVertices};
 use crate::colors::ColorTable;
 use crate::colors::Rgb;
@@ -86,8 +85,7 @@ pub(super) struct RenderInfo {
 /// vertices.
 type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 
-pub(crate) struct BackendState<'f> {
-    // cell data
+pub(crate) struct TuiSurface {
     pub(super) cells: Vec<Cell>,
     pub(super) cell_remap: Vec<u16>,
     pub(super) dirty_rows: BitVec,
@@ -95,9 +93,10 @@ pub(crate) struct BackendState<'f> {
     pub(super) slow_blinking: BitVec,
     pub(super) cursor: (u16, u16),
     pub(super) cursor_view: (u16, u16),
+}
 
+pub(crate) struct BackendState<'f> {
     // backend state flags
-    pub(super) viewport: Viewport,
     pub(super) fonts: Fonts<'f>,
     pub(super) colors: ColorTable,
     pub(super) reset_fg: Rgb,
@@ -132,6 +131,7 @@ pub(crate) struct BackendState<'f> {
 pub struct WgpuBackend<'f, 's> {
     // ratatui state
     pub(super) state: BackendState<'f>,
+    pub(super) tui_surface: TuiSurface,
 
     // positioned glyphs.
     pub(super) rendered: Vec<Rendered>,
@@ -246,7 +246,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.wgpu_base.surface_config.height = height;
 
         rebuild_surface(
-            &mut self.state,
+            self.state.fonts.font_box(),
+            &mut self.tui_surface,
             &mut self.rendered,
             &mut self.wgpu_base,
             self.wgpu_post_process.as_mut(),
@@ -256,7 +257,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     /// Get the text currently displayed on the screen.
     pub fn get_text(&self) -> String {
         let bounds = self.size().unwrap();
-        self.state.cells.chunks(bounds.width as usize).fold(
+        self.tui_surface.cells.chunks(bounds.width as usize).fold(
             String::with_capacity((bounds.width + 1) as usize * bounds.height as usize),
             |dest, row| {
                 let mut dest = row.iter().fold(dest, |mut dest, s| {
@@ -276,7 +277,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         new_colors: ColorTable,
     ) {
-        self.state.dirty_rows.clear();
+        self.tui_surface.dirty_rows.clear();
         self.state.colors = new_colors;
     }
 
@@ -286,12 +287,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         new_fonts: Fonts<'f>,
     ) {
-        self.state.dirty_rows.clear();
+        self.tui_surface.dirty_rows.clear();
         self.wgpu_atlas.cached.match_fonts(&new_fonts);
         self.state.fonts = new_fonts;
 
         rebuild_surface(
-            &mut self.state,
+            self.state.fonts.font_box(),
+            &mut self.tui_surface,
             &mut self.rendered,
             &mut self.wgpu_base,
             self.wgpu_post_process.as_mut(),
@@ -309,11 +311,12 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     ) {
         self.state.fonts.clear_fonts();
         self.state.fonts.add_fonts(new_fonts);
-        self.state.dirty_rows.clear();
+        self.tui_surface.dirty_rows.clear();
         self.wgpu_atlas.cached.match_fonts(&self.state.fonts);
 
         rebuild_surface(
-            &mut self.state,
+            self.state.fonts.font_box(),
+            &mut self.tui_surface,
             &mut self.rendered,
             &mut self.wgpu_base,
             self.wgpu_post_process.as_mut(),
@@ -326,12 +329,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         new_font_size: u32,
     ) {
-        self.state.dirty_rows.clear();
+        self.tui_surface.dirty_rows.clear();
         self.state.fonts.set_size_px(new_font_size);
         self.wgpu_atlas.cached.match_fonts(&self.state.fonts);
 
         rebuild_surface(
-            &mut self.state,
+            self.state.fonts.font_box(),
+            &mut self.tui_surface,
             &mut self.rendered,
             &mut self.wgpu_base,
             self.wgpu_post_process.as_mut(),
@@ -368,13 +372,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         let mut index_offset = 0;
 
         let cell_indexes = self
-            .state
+            .tui_surface
             .fast_blinking
             .iter_ones()
-            .chain(self.state.slow_blinking.iter_ones())
+            .chain(self.tui_surface.slow_blinking.iter_ones())
             .chain(iter::once(
-                self.state.cursor_view.1 as usize * bounds.width as usize
-                    + self.state.cursor_view.0 as usize,
+                self.tui_surface.cursor_view.1 as usize * bounds.width as usize
+                    + self.tui_surface.cursor_view.0 as usize,
             ))
             .collect::<Vec<_>>();
         for index in cell_indexes {
@@ -405,37 +409,29 @@ impl<'f, 's> WgpuBackend<'f, 's> {
 /// Resize the rendering surface. This should be called e.g. to keep the
 /// backend in sync with your window size.
 fn rebuild_surface(
-    state: &mut BackendState,
+    font_box: FontBox,
+    tui_surface: &mut TuiSurface,
     rendered: &mut Vec<Rendered>,
     wgpu_base: &mut WgpuBase,
     wgpu_post_process: &mut dyn PostProcessor,
 ) {
-    let (inset_width, inset_height) = match state.viewport {
-        Viewport::Full => (0, 0),
-        Viewport::Shrink { width, height } => (width, height),
-    };
-
     let width = wgpu_base.surface_config.width;
     let height = wgpu_base.surface_config.height;
     wgpu_base
         .surface
         .configure(&wgpu_base.device, &wgpu_base.surface_config);
 
-    let width = width - inset_width;
-    let height = height - inset_height;
-    let font_box = state.fonts.font_box();
-
     let chars_wide = width / font_box.width;
     let chars_high = height / font_box.height;
 
-    state.cells.clear();
-    state.cell_remap.clear();
-    state.fast_blinking.clear();
-    state.slow_blinking.clear();
+    tui_surface.cells.clear();
+    tui_surface.cell_remap.clear();
+    tui_surface.fast_blinking.clear();
+    tui_surface.slow_blinking.clear();
     // This always needs to be cleared because the surface is cleared when it is
     // resized. If we don't re-render the rows, we end up with a blank surface when
     // the resize is less than a character dimension.
-    state.dirty_rows.clear();
+    tui_surface.dirty_rows.clear();
 
     rendered.clear();
 
@@ -744,44 +740,44 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     {
         let bounds = self.size()?;
 
-        self.state
+        self.tui_surface
             .cells
             .resize(bounds.height as usize * bounds.width as usize, Cell::EMPTY);
-        self.state
+        self.tui_surface
             .cell_remap
             .resize(bounds.height as usize * bounds.width as usize, 0);
         self.rendered.resize_with(
             bounds.height as usize * bounds.width as usize,
             Rendered::default,
         );
-        self.state
+        self.tui_surface
             .fast_blinking
             .resize(bounds.height as usize * bounds.width as usize, false);
-        self.state
+        self.tui_surface
             .slow_blinking
             .resize(bounds.height as usize * bounds.width as usize, false);
-        self.state.dirty_rows.resize(bounds.height as usize, true);
+        self.tui_surface.dirty_rows.resize(bounds.height as usize, true);
 
         for (x, y, cell) in content {
             let offset = y as usize * bounds.width as usize;
             let index = offset + x as usize;
 
-            self.state
+            self.tui_surface
                 .fast_blinking
                 .set(index, cell.modifier.contains(Modifier::RAPID_BLINK));
-            self.state
+            self.tui_surface
                 .slow_blinking
                 .set(index, cell.modifier.contains(Modifier::SLOW_BLINK));
 
-            for i in 1..self.state.cells[index].symbol().width() {
-                self.state.cells[index + i] = ONE_CELL;
+            for i in 1..self.tui_surface.cells[index].symbol().width() {
+                self.tui_surface.cells[index + i] = ONE_CELL;
             }
-            self.state.cells[index] = cell.clone();
-            for i in 1..self.state.cells[index].symbol().width() {
-                self.state.cells[index + i] = NULL_CELL;
+            self.tui_surface.cells[index] = cell.clone();
+            for i in 1..self.tui_surface.cells[index].symbol().width() {
+                self.tui_surface.cells[index + i] = NULL_CELL;
             }
 
-            self.state.dirty_rows.set(y as usize, true);
+            self.tui_surface.dirty_rows.set(y as usize, true);
         }
 
         Ok(())
@@ -798,7 +794,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     }
 
     fn get_cursor_position(&mut self) -> std::io::Result<Position> {
-        Ok(Position::new(self.state.cursor.0, self.state.cursor.1))
+        Ok(Position::new(self.tui_surface.cursor.0, self.tui_surface.cursor.1))
     }
 
     fn set_cursor_position<Pos: Into<Position>>(
@@ -807,33 +803,29 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     ) -> std::io::Result<()> {
         let bounds = self.size()?;
         let pos: Position = position.into();
-        self.state.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
-        self.state.cursor_view = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1)); // TODO
-        self.state
+        self.tui_surface.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
+        self.tui_surface.cursor_view = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1)); // TODO
+        self.tui_surface
             .dirty_rows
-            .set(self.state.cursor.1 as usize, true);
+            .set(self.tui_surface.cursor.1 as usize, true);
         Ok(())
     }
 
     fn clear(&mut self) -> std::io::Result<()> {
-        self.state.cells.clear();
-        self.state.dirty_rows.clear();
+        self.tui_surface.cells.clear();
+        self.tui_surface.dirty_rows.clear();
         self.rendered.clear();
-        self.state.fast_blinking.clear();
-        self.state.slow_blinking.clear();
-        self.state.cursor = (0, 0);
-        self.state.cursor_view = (0, 0);
+        self.tui_surface.fast_blinking.clear();
+        self.tui_surface.slow_blinking.clear();
+        self.tui_surface.cursor = (0, 0);
+        self.tui_surface.cursor_view = (0, 0);
 
         Ok(())
     }
 
     fn size(&self) -> std::io::Result<Size> {
-        let (inset_width, inset_height) = match self.state.viewport {
-            Viewport::Full => (0, 0),
-            Viewport::Shrink { width, height } => (width, height),
-        };
-        let width = self.wgpu_base.surface_config.width - inset_width;
-        let height = self.wgpu_base.surface_config.height - inset_height;
+        let width = self.wgpu_base.surface_config.width;
+        let height = self.wgpu_base.surface_config.height;
 
         Ok(Size {
             width: (width / self.state.fonts.min_width_px()) as u16,
@@ -842,12 +834,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     }
 
     fn window_size(&mut self) -> std::io::Result<WindowSize> {
-        let (inset_width, inset_height) = match self.state.viewport {
-            Viewport::Full => (0, 0),
-            Viewport::Shrink { width, height } => (width, height),
-        };
-        let width = self.wgpu_base.surface_config.width - inset_width;
-        let height = self.wgpu_base.surface_config.height - inset_height;
+        let width = self.wgpu_base.surface_config.width;
+        let height = self.wgpu_base.surface_config.height;
 
         Ok(WindowSize {
             columns_rows: Size {
@@ -869,8 +857,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         // reset blink, removes flickering.
         self.state.cursor_blink = 0;
 
-        for (row_idx, row_cells) in self.state.cells.chunks(bounds.width as usize).enumerate() {
-            if !self.state.dirty_rows[row_idx] {
+        for (row_idx, row_cells) in self.tui_surface.cells.chunks(bounds.width as usize).enumerate() {
+            if !self.tui_surface.dirty_rows[row_idx] {
                 continue;
             }
 
@@ -893,7 +881,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     );
                 }
 
-                self.state.cell_remap[row_offset + cell_idx] = cell_idx as u16;
+                self.tui_surface.cell_remap[row_offset + cell_idx] = cell_idx as u16;
 
                 fontmap.push(self.state.fonts.font_for_cell(cell));
             }
@@ -937,7 +925,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             &self.wgpu_base,
                             row_idx,
                             row_cells,
-                            &self.state.cell_remap[row_offset..row_offset + bounds.width as usize],
+                            &self.tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
                             &self.tmp_rowbuf_to_cell,
                             shape_with_plan(
                                 current_font.font(),
@@ -952,7 +940,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                                 is_fallback: current_is_fallback,
                             },
                             self.state.cursor_visible,
-                            self.state.cursor,
+                            self.tui_surface.cursor,
                             &mut self.rendered[row_offset..row_offset + bounds.width as usize],
                             &mut self.wgpu_atlas,
                         );
@@ -962,14 +950,14 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                         // rtl flip visible cell index for this run.
                         let view_idx = (max_cell_idx - (cell_idx - min_cell_idx)) as u16;
 
-                        if (cell_idx as u16, row_idx as u16) == self.state.cursor {
-                            self.state.cursor_view = (view_idx, row_idx as u16);
+                        if (cell_idx as u16, row_idx as u16) == self.tui_surface.cursor {
+                            self.tui_surface.cursor_view = (view_idx, row_idx as u16);
                             self.state.cursor_style = self.state.cursor_style.to_rtl();
                         }
 
-                        self.state.cell_remap[row_offset + cell_idx] = view_idx;
+                        self.tui_surface.cell_remap[row_offset + cell_idx] = view_idx;
                     } else {
-                        if (cell_idx as u16, row_idx as u16) == self.state.cursor {
+                        if (cell_idx as u16, row_idx as u16) == self.tui_surface.cursor {
                             self.state.cursor_style = self.state.cursor_style.to_ltr();
                         }
                     }
@@ -989,7 +977,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 &self.wgpu_base,
                 row_idx,
                 row_cells,
-                &self.state.cell_remap[row_offset..row_offset + bounds.width as usize],
+                &self.tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
                 &self.tmp_rowbuf_to_cell,
                 shape_with_plan(
                     current_font.font(),
@@ -1004,19 +992,19 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     is_fallback: current_is_fallback,
                 },
                 self.state.cursor_visible,
-                self.state.cursor,
+                self.tui_surface.cursor,
                 &mut self.rendered[row_offset..row_offset + bounds.width as usize],
                 &mut self.wgpu_atlas,
             );
         }
 
-        if self.wgpu_post_process.needs_update() || self.state.dirty_rows.any() {
+        if self.wgpu_post_process.needs_update() || self.tui_surface.dirty_rows.any() {
             self.wgpu_vertices.bg_vertices.clear();
             self.wgpu_vertices.text_vertices.clear();
             self.wgpu_vertices.text_indices.clear();
 
             let mut index_offset = 0;
-            for row in self.state.dirty_rows.iter_ones() {
+            for row in self.tui_surface.dirty_rows.iter_ones() {
                 let row_index = row * bounds.width as usize;
                 for col_index in 0..bounds.width as usize {
                     let index = row_index + col_index;
@@ -1031,7 +1019,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 }
             }
 
-            self.state
+            self.tui_surface
                 .dirty_rows
                 .iter_mut()
                 .for_each(|mut v| *v = false);
@@ -1057,26 +1045,26 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         clear_type: ClearType,
     ) -> std::io::Result<()> {
         let bounds = self.size()?;
-        let line_start = self.state.cursor.1 as usize * bounds.width as usize;
-        let idx = line_start + self.state.cursor.0 as usize;
+        let line_start = self.tui_surface.cursor.1 as usize * bounds.width as usize;
+        let idx = line_start + self.tui_surface.cursor.0 as usize;
 
         match clear_type {
             ClearType::All => self.clear(),
             ClearType::AfterCursor => {
-                self.state.cells.truncate(idx + 1);
+                self.tui_surface.cells.truncate(idx + 1);
                 Ok(())
             }
             ClearType::BeforeCursor => {
-                self.state.cells[..idx].fill(Cell::EMPTY);
+                self.tui_surface.cells[..idx].fill(Cell::EMPTY);
                 Ok(())
             }
             ClearType::CurrentLine => {
-                self.state.cells[line_start..line_start + bounds.width as usize].fill(Cell::EMPTY);
+                self.tui_surface.cells[line_start..line_start + bounds.width as usize].fill(Cell::EMPTY);
                 Ok(())
             }
             ClearType::UntilNewLine => {
-                let remain = (bounds.width - self.state.cursor.0) as usize;
-                self.state.cells[idx..idx + remain].fill(Cell::EMPTY);
+                let remain = (bounds.width - self.tui_surface.cursor.0) as usize;
+                self.tui_surface.cells[idx..idx + remain].fill(Cell::EMPTY);
                 Ok(())
             }
         }

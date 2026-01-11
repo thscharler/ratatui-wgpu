@@ -199,7 +199,6 @@ pub use backend::wgpu_backend::WgpuBackend;
 pub use backend::Dimensions;
 pub use backend::PostProcessor;
 pub use backend::PostProcessorBuilder;
-pub use backend::Viewport;
 pub use colors::ColorTable;
 pub use fonts::Font;
 pub use fonts::Fonts;

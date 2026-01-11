@@ -91,7 +91,6 @@ pub struct Builder<'a, P> {
     present_mode: Option<PresentMode>,
     width: NonZeroU32,
     height: NonZeroU32,
-    viewport: Viewport,
     colors: ColorTable,
     reset_fg: Color,
     reset_bg: Color,
@@ -119,7 +118,6 @@ where
             present_mode: None,
             width: NonZeroU32::new(1).unwrap(),
             height: NonZeroU32::new(1).unwrap(),
-            viewport: Viewport::Full,
             colors: named::DEFAULT_COLORS,
             reset_fg: Color::Black,
             reset_bg: Color::White,
@@ -142,7 +140,6 @@ where
             present_mode: None,
             width: NonZeroU32::new(1).unwrap(),
             height: NonZeroU32::new(1).unwrap(),
-            viewport: Viewport::Full,
             colors: named::DEFAULT_COLORS,
             reset_fg: Color::Black,
             reset_bg: Color::White,
@@ -173,7 +170,6 @@ where
             present_mode: None,
             width: NonZeroU32::new(1).unwrap(),
             height: NonZeroU32::new(1).unwrap(),
-            viewport: Viewport::Full,
             colors: named::DEFAULT_COLORS,
             reset_fg: Color::Black,
             reset_bg: Color::White,
@@ -192,17 +188,6 @@ where
         instance: Instance,
     ) -> Self {
         self.instance = Some(instance);
-        self
-    }
-
-    /// Use the supplied [`Viewport`] for rendering. Defaults to
-    /// [`Viewport::Full`].
-    #[must_use]
-    pub fn with_viewport(
-        mut self,
-        viewport: Viewport,
-    ) -> Self {
-        self.viewport = viewport;
         self
     }
 
@@ -528,13 +513,8 @@ where
 
         surface.configure(&device, &surface_config);
 
-        let (inset_width, inset_height) = match self.viewport {
-            Viewport::Full => (0, 0),
-            Viewport::Shrink { width, height } => (width, height),
-        };
-
-        let drawable_width = surface_config.width - inset_width;
-        let drawable_height = surface_config.height - inset_height;
+        let drawable_width = surface_config.width;
+        let drawable_height = surface_config.height;
 
         info!(
             "char width x height: {}x{}",
@@ -631,14 +611,6 @@ where
 
         Ok(WgpuBackend {
             state: BackendState {
-                cells: vec![],
-                cell_remap: vec![],
-                dirty_rows: Default::default(),
-                fast_blinking: Default::default(),
-                slow_blinking: Default::default(),
-                cursor: (0, 0),
-                cursor_view: (0, 0),
-                viewport: self.viewport,
                 fonts: self.fonts,
                 colors: self.colors,
                 reset_fg,
@@ -655,7 +627,15 @@ where
                 slow_blink_divisor: self.slow_blink,
                 slow_blink_showing: true,
             },
-
+            tui_surface: TuiSurface {
+                cells: vec![],
+                cell_remap: vec![],
+                dirty_rows: Default::default(),
+                fast_blinking: Default::default(),
+                slow_blinking: Default::default(),
+                cursor: (0, 0),
+                cursor_view: (0, 0),
+            },
             rendered: vec![],
 
             plan_cache: PlanCache::new(font_count.max(2)),
