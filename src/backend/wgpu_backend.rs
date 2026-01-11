@@ -42,7 +42,7 @@ use unicode_bidi::ParagraphBidiInfo;
 use unicode_properties::GeneralCategoryGroup;
 use unicode_properties::UnicodeEmoji;
 use unicode_properties::UnicodeGeneralCategory;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 use wgpu::CommandEncoderDescriptor;
@@ -642,6 +642,7 @@ fn flush_tui(
                         row_idx,
                         row_cells,
                         &tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
+                        &tmp_rowbuf,
                         &tmp_rowbuf_to_cell,
                         shape_with_plan(
                             current_font.font(),
@@ -694,6 +695,7 @@ fn flush_tui(
             row_idx,
             row_cells,
             &tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
+            &tmp_rowbuf,
             tmp_rowbuf_to_cell,
             shape_with_plan(
                 current_font.font(),
@@ -1156,9 +1158,10 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 // This ensures that the output is mostly cell-aligned and makes
 // the final result more predictable.
 fn shape(
-    y: usize,
+    row_idx: usize,
     row: &[Cell],
     cell_remap: &[u16],
+    buf_str: &str,
     buf_to_cell: &[u16],
     buffer: GlyphBuffer,
     font: RenderedFont<'_>,
@@ -1172,6 +1175,7 @@ fn shape(
     let advance_scale = font.font_box.scale;
 
     let mut x = 0;
+    let mut default_chars_wide = 1;
     let mut chars_wide = 1;
     let mut last_cell_idx: Option<usize> = None;
     let mut last_advance = 0;
@@ -1182,6 +1186,11 @@ fn shape(
     {
         let cell_idx = buf_to_cell[info.cluster as usize] as usize;
         let cell = &row[cell_idx];
+        let ch = buf_str[info.cluster as usize..]
+            .chars()
+            .next()
+            .unwrap_or_default();
+        let ch_category = ch.general_category_group();
 
         // Every cell has it's defined position on the grid.
         // This position is used as a starting point from which
@@ -1189,14 +1198,17 @@ fn shape(
         let mut first_glyph = false;
         if last_cell_idx != Some(cell_idx) {
             x = cell_remap[cell_idx] as i32 * font.font_box.width as i32;
-            chars_wide = cell.symbol().width().max(1);
+            default_chars_wide = ch.width().unwrap_or(1).max(1);
+            chars_wide = default_chars_wide;
             last_advance = 0;
             first_glyph = true;
+        } else {
+            chars_wide = ch.width().unwrap_or(default_chars_wide);
         }
 
-        // if we have a combining '.undef' skip it completely.
+        // if we have a combining '.undef'. skip it completely.
         if last_cell_idx == Some(cell_idx) {
-            if info.glyph_id == 0 {
+            if ch_category == GeneralCategoryGroup::Mark && info.glyph_id == 0 {
                 continue;
             }
         }
@@ -1206,7 +1218,7 @@ fn shape(
         let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
         let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
 
-        let basey = y as i32 * font.font_box.height as i32
+        let basey = row_idx as i32 * font.font_box.height as i32
             + (position.y_offset as f32 * advance_scale) as i32;
 
         let mut basex = x + glyph_offset;
@@ -1243,11 +1255,12 @@ fn shape(
             font.font_box.height,
         );
 
-        let cursor_pos = if first_glyph && cursor_visible && (cell_idx as u16, y as u16) == cursor {
-            font.underline(font.font_box.height, cached.height)
-        } else {
-            (0, 0)
-        };
+        let cursor_pos =
+            if first_glyph && cursor_visible && (cell_idx as u16, row_idx as u16) == cursor {
+                font.underline(font.font_box.height, cached.height)
+            } else {
+                (0, 0)
+            };
 
         let underline_pos = if key.style.contains(Modifier::UNDERLINED) {
             font.underline(font.font_box.height, cached.height)
@@ -1280,10 +1293,7 @@ fn shape(
             continue;
         }
 
-        let ch = cell.symbol().chars().next().unwrap();
-        let is_emoji = ch.is_emoji_char()
-            && !matches!(ch.general_category_group(), GeneralCategoryGroup::Number);
-
+        let is_emoji = ch.is_emoji_char();
         let (cached, image, colored) = rasterize_glyph(
             cached,
             metrics,
