@@ -26,8 +26,6 @@ use ratatui_core::backend::Backend;
 use ratatui_core::backend::ClearType;
 use ratatui_core::backend::WindowSize;
 use ratatui_core::buffer::Cell;
-use ratatui_core::layout::Position;
-use ratatui_core::layout::Size;
 use ratatui_core::style::Modifier;
 use rustybuzz::shape_with_plan;
 use rustybuzz::ttf_parser::RasterGlyphImage;
@@ -47,7 +45,6 @@ use unicode_properties::UnicodeGeneralCategory;
 use unicode_width::UnicodeWidthStr;
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
-use wgpu::BufferUsages;
 use wgpu::CommandEncoderDescriptor;
 use wgpu::Extent3d;
 use wgpu::IndexFormat;
@@ -58,6 +55,7 @@ use wgpu::RenderPassColorAttachment;
 use wgpu::RenderPassDescriptor;
 use wgpu::StoreOp;
 use wgpu::TextureAspect;
+use wgpu::{BufferUsages, Queue};
 
 const NULL_CELL: Cell = {
     let mut c = Cell::new("");
@@ -134,7 +132,7 @@ pub struct WgpuBackend<'f, 's> {
     pub(super) rendered: Vec<Rendered>,
 
     // temporaries for shaping
-    pub(super) plan_cache: PlanCache,
+    pub(super) tmp_plan_cache: PlanCache,
     pub(super) tmp_rowbuf: String,
     pub(super) tmp_rowbuf_to_cell: Vec<u16>,
     pub(super) tmp_buffer: UnicodeBuffer,
@@ -288,7 +286,6 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.tui_surface.dirty_rows.clear();
         self.wgpu_atlas.cached.match_fonts(&self.fonts);
 
-
         rebuild_surface(
             self.fonts.font_box(),
             &mut self.tui_surface,
@@ -344,53 +341,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     pub fn blink(&mut self) {
         let bounds = self.size().unwrap();
 
-        self.wgpu_vertices.bg_vertices.clear();
-        self.wgpu_vertices.text_vertices.clear();
-        self.wgpu_vertices.text_indices.clear();
-
-        self.tui_surface.blink = self.tui_surface.blink.wrapping_add(1);
-        self.tui_surface.cursor_blink = self.tui_surface.cursor_blink.wrapping_add(1);
-
-        if self.tui_surface.fast_blink_divisor != 0
-            && self.tui_surface.blink % self.tui_surface.fast_blink_divisor == 0
-        {
-            self.tui_surface.fast_blink_showing = !self.tui_surface.fast_blink_showing;
-        }
-        if self.tui_surface.slow_blink_divisor != 0
-            && self.tui_surface.blink % self.tui_surface.slow_blink_divisor == 0
-        {
-            self.tui_surface.slow_blink_showing = !self.tui_surface.slow_blink_showing;
-        }
-        if self.tui_surface.cursor_divisor != 0
-            && self.tui_surface.cursor_blink % self.tui_surface.cursor_divisor == 0
-        {
-            self.tui_surface.cursor_showing = !self.tui_surface.cursor_showing;
-        }
-
-        let mut index_offset = 0;
-
-        let cell_indexes = self
-            .tui_surface
-            .fast_blinking
-            .iter_ones()
-            .chain(self.tui_surface.slow_blinking.iter_ones())
-            .chain(iter::once(
-                self.tui_surface.cursor_view.1 as usize * bounds.width as usize
-                    + self.tui_surface.cursor_view.0 as usize,
-            ))
-            .collect::<Vec<_>>();
-        for index in cell_indexes {
-            if let Some(to_render) = self.rendered.get(index) {
-                append_rendered(
-                    &self.tui_surface,
-                    to_render,
-                    &mut index_offset,
-                    &mut self.wgpu_vertices,
-                );
-            }
-        }
-
-        self.wgpu_base.queue.submit([]);
+        flush_blink(
+            bounds,
+            &mut self.tui_surface,
+            &self.rendered,
+            &mut self.wgpu_vertices,
+            &self.wgpu_base.queue,
+        );
 
         render(
             self.window_size().expect("window_size"),
@@ -444,6 +401,401 @@ fn rebuild_surface(
         &wgpu_base.text_dest_view,
         &wgpu_base.surface_config,
     );
+}
+
+fn render(
+    bounds: WindowSize,
+    font_box: FontBox,
+    reset_bg: Rgb,
+    base: &WgpuBase,
+    pipeline: &WgpuPipeline,
+    post_process: &mut dyn PostProcessor,
+    vertices: &WgpuVertices,
+) {
+    let mut encoder = base
+        .device
+        .create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Draw Encoder"),
+        });
+
+    if !vertices.text_vertices.is_empty() {
+        {
+            let mut uniforms = base
+                .queue
+                .write_buffer_with(
+                    &pipeline.text_screen_size_buffer,
+                    0,
+                    NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap(),
+                )
+                .unwrap();
+            uniforms.copy_from_slice(bytemuck::cast_slice(&[
+                bounds.columns_rows.width as f32 * font_box.width as f32,
+                bounds.columns_rows.height as f32 * font_box.height as f32,
+                0.0,
+                0.0,
+            ]));
+        }
+
+        let bg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Text Bg Vertices"),
+            contents: bytemuck::cast_slice(&vertices.bg_vertices),
+            usage: BufferUsages::VERTEX,
+        });
+
+        let fg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Text Vertices"),
+            contents: bytemuck::cast_slice(&vertices.text_vertices),
+            usage: BufferUsages::VERTEX,
+        });
+
+        let indices = base.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Text Indices"),
+            contents: bytemuck::cast_slice(&vertices.text_indices),
+            usage: BufferUsages::INDEX,
+        });
+
+        {
+            let mut text_render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Text Render Pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &base.text_dest_view,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                ..Default::default()
+            });
+
+            text_render_pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
+
+            text_render_pass.set_pipeline(&pipeline.text_bg_compositor.pipeline);
+            text_render_pass.set_bind_group(0, &pipeline.text_bg_compositor.fs_uniforms, &[]);
+            text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
+            text_render_pass.draw_indexed(0..(vertices.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
+
+            text_render_pass.set_pipeline(&pipeline.text_fg_compositor.pipeline);
+            text_render_pass.set_bind_group(0, &pipeline.text_fg_compositor.fs_uniforms, &[]);
+            text_render_pass.set_bind_group(1, &pipeline.text_fg_compositor.atlas_bindings, &[]);
+
+            text_render_pass.set_vertex_buffer(0, fg_vertices.slice(..));
+            text_render_pass.draw_indexed(
+                0..(vertices.text_vertices.len() as u32 / 4) * 6,
+                0,
+                0..1,
+            );
+        }
+    }
+
+    let Some(texture) = base.surface.get_current_texture() else {
+        return;
+    };
+
+    let bg_color_u32 = u32::from_le_bytes([reset_bg[0], reset_bg[1], reset_bg[2], 255]);
+
+    post_process.process(
+        bg_color_u32,
+        &mut encoder,
+        &base.queue,
+        &base.text_dest_view,
+        &base.surface_config,
+        texture.get_view(),
+    );
+
+    base.queue.submit(Some(encoder.finish()));
+    texture.present();
+}
+
+fn draw_tui(
+    bounds: ratatui_core::layout::Size,
+    content: &mut dyn Iterator<Item = (u16, u16, &'_ Cell)>,
+    tui_surface: &mut TuiSurface,
+    rendered: &mut Vec<Rendered>,
+) {
+    tui_surface
+        .cells
+        .resize(bounds.height as usize * bounds.width as usize, Cell::EMPTY);
+    tui_surface
+        .cell_remap
+        .resize(bounds.height as usize * bounds.width as usize, 0);
+    tui_surface
+        .fast_blinking
+        .resize(bounds.height as usize * bounds.width as usize, false);
+    tui_surface
+        .slow_blinking
+        .resize(bounds.height as usize * bounds.width as usize, false);
+    tui_surface.dirty_rows.resize(bounds.height as usize, true);
+
+    rendered.resize_with(
+        bounds.height as usize * bounds.width as usize,
+        Rendered::default,
+    );
+
+    for (x, y, cell) in content {
+        let offset = y as usize * bounds.width as usize;
+        let index = offset + x as usize;
+
+        tui_surface
+            .fast_blinking
+            .set(index, cell.modifier.contains(Modifier::RAPID_BLINK));
+        tui_surface
+            .slow_blinking
+            .set(index, cell.modifier.contains(Modifier::SLOW_BLINK));
+
+        for i in 1..tui_surface.cells[index].symbol().width() {
+            tui_surface.cells[index + i] = ONE_CELL;
+        }
+        tui_surface.cells[index] = cell.clone();
+        for i in 1..tui_surface.cells[index].symbol().width() {
+            tui_surface.cells[index + i] = NULL_CELL;
+        }
+
+        tui_surface.dirty_rows.set(y as usize, true);
+    }
+}
+
+fn flush_tui(
+    bounds: ratatui_core::layout::Size,
+    fonts: &Fonts<'_>,
+    tui_surface: &mut TuiSurface,
+    rendered: &mut Vec<Rendered>,
+    wgpu_atlas: &mut WgpuAtlas,
+    queue: &Queue,
+    //
+    tmp_plan_cache: &mut PlanCache,
+    tmp_rowbuf: &mut String,
+    tmp_rowbuf_to_cell: &mut Vec<u16>,
+    tmp_buffer: &mut UnicodeBuffer,
+) {
+    // always show cursor on flush.
+    tui_surface.cursor_showing = true;
+    // reset blink, removes flickering.
+    tui_surface.cursor_blink = 0;
+
+    for (row_idx, row_cells) in tui_surface.cells.chunks(bounds.width as usize).enumerate() {
+        if !tui_surface.dirty_rows[row_idx] {
+            continue;
+        }
+
+        let row_offset = row_idx.min(bounds.height as usize - 1) * bounds.width as usize;
+
+        // This block concatenates the strings for the row into one string for bidi
+        // resolution, then maps bytes for the string to their associated cell index. It
+        // also maps the row's cell index to the font that can source all glyphs for
+        // that cell.
+        tmp_rowbuf.clear();
+        tmp_rowbuf_to_cell.clear();
+
+        let mut fontmap = Vec::with_capacity(tmp_rowbuf_to_cell.capacity());
+        for (cell_idx, cell) in row_cells.iter().enumerate() {
+            if !cell.skip {
+                tmp_rowbuf.push_str(cell.symbol());
+                tmp_rowbuf_to_cell.resize(
+                    tmp_rowbuf_to_cell.len() + cell.symbol().len(),
+                    cell_idx as u16,
+                );
+            }
+
+            tui_surface.cell_remap[row_offset + cell_idx] = cell_idx as u16;
+
+            fontmap.push(fonts.font_for_cell(cell));
+        }
+
+        // rebuild from scratch
+        for cell_idx in 0..bounds.width as usize {
+            rendered[row_offset + cell_idx].clear();
+        }
+
+        // run text shaping
+        let bidi = ParagraphBidiInfo::new(&tmp_rowbuf, None);
+        let (levels, runs) = bidi.visual_runs(0..bidi.levels.len());
+
+        let (
+            mut current_font,
+            mut current_fake_bold,
+            mut current_fake_italic,
+            mut current_is_fallback,
+        ) = fontmap[0];
+        let mut current_level = Level::ltr();
+
+        for (level, range) in runs.into_iter().map(|run| (levels[run.start], run)) {
+            let bidi_run_chars = &tmp_rowbuf[range.clone()];
+            let bidi_run_cells = &tmp_rowbuf_to_cell[range.clone()];
+            let min_cell_idx = *bidi_run_cells.first().expect("first") as usize;
+            let max_cell_idx = *bidi_run_cells.last().expect("last") as usize;
+
+            for (ch_idx, ch) in bidi_run_chars.char_indices() {
+                let cell_idx = bidi_run_cells[ch_idx] as usize;
+
+                let (font, fake_bold, fake_italic, is_fallback) = fontmap[cell_idx];
+                if font.id() != current_font.id()
+                    || current_fake_bold != fake_bold
+                    || current_fake_italic != fake_italic
+                    || current_is_fallback != is_fallback
+                    || current_level != level
+                {
+                    let mut buffer = mem::take(tmp_buffer);
+
+                    *tmp_buffer = shape(
+                        row_idx,
+                        row_cells,
+                        &tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
+                        &tmp_rowbuf_to_cell,
+                        shape_with_plan(
+                            current_font.font(),
+                            tmp_plan_cache.get(current_font, &mut buffer),
+                            buffer,
+                        ),
+                        RenderedFont {
+                            font_box: fonts.font_box(),
+                            font: current_font,
+                            fake_bold: current_fake_bold,
+                            fake_italic: current_fake_italic,
+                            is_fallback: current_is_fallback,
+                        },
+                        tui_surface.cursor_visible,
+                        tui_surface.cursor,
+                        &mut rendered[row_offset..row_offset + bounds.width as usize],
+                        wgpu_atlas,
+                        queue,
+                    );
+                }
+
+                if level.is_rtl() {
+                    // rtl flip visible cell index for this run.
+                    let view_idx = (max_cell_idx - (cell_idx - min_cell_idx)) as u16;
+
+                    if (cell_idx as u16, row_idx as u16) == tui_surface.cursor {
+                        tui_surface.cursor_view = (view_idx, row_idx as u16);
+                        tui_surface.cursor_style = tui_surface.cursor_style.to_rtl();
+                    }
+
+                    tui_surface.cell_remap[row_offset + cell_idx] = view_idx;
+                } else {
+                    if (cell_idx as u16, row_idx as u16) == tui_surface.cursor {
+                        tui_surface.cursor_style = tui_surface.cursor_style.to_ltr();
+                    }
+                }
+
+                tmp_buffer.add(ch, (range.start + ch_idx) as u32);
+
+                current_font = font;
+                current_fake_bold = fake_bold;
+                current_fake_italic = fake_italic;
+                current_is_fallback = is_fallback;
+                current_level = level;
+            }
+        }
+
+        let mut buffer = mem::take(tmp_buffer);
+        *tmp_buffer = shape(
+            row_idx,
+            row_cells,
+            &tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
+            tmp_rowbuf_to_cell,
+            shape_with_plan(
+                current_font.font(),
+                tmp_plan_cache.get(current_font, &mut buffer),
+                buffer,
+            ),
+            RenderedFont {
+                font_box: fonts.font_box(),
+                font: current_font,
+                fake_bold: current_fake_bold,
+                fake_italic: current_fake_italic,
+                is_fallback: current_is_fallback,
+            },
+            tui_surface.cursor_visible,
+            tui_surface.cursor,
+            &mut rendered[row_offset..row_offset + bounds.width as usize],
+            wgpu_atlas,
+            queue,
+        );
+    }
+}
+
+fn flush_blink(
+    bounds: ratatui_core::layout::Size,
+    tui_surface: &mut TuiSurface,
+    rendered: &Vec<Rendered>,
+    wgpu_vertices: &mut WgpuVertices,
+    queue: &Queue,
+) {
+    wgpu_vertices.bg_vertices.clear();
+    wgpu_vertices.text_vertices.clear();
+    wgpu_vertices.text_indices.clear();
+
+    tui_surface.blink = tui_surface.blink.wrapping_add(1);
+    tui_surface.cursor_blink = tui_surface.cursor_blink.wrapping_add(1);
+
+    if tui_surface.fast_blink_divisor != 0
+        && tui_surface.blink % tui_surface.fast_blink_divisor == 0
+    {
+        tui_surface.fast_blink_showing = !tui_surface.fast_blink_showing;
+    }
+    if tui_surface.slow_blink_divisor != 0
+        && tui_surface.blink % tui_surface.slow_blink_divisor == 0
+    {
+        tui_surface.slow_blink_showing = !tui_surface.slow_blink_showing;
+    }
+    if tui_surface.cursor_divisor != 0 && tui_surface.cursor_blink % tui_surface.cursor_divisor == 0
+    {
+        tui_surface.cursor_showing = !tui_surface.cursor_showing;
+    }
+
+    let mut index_offset = 0;
+
+    let cell_indexes = tui_surface
+        .fast_blinking
+        .iter_ones()
+        .chain(tui_surface.slow_blinking.iter_ones())
+        .chain(iter::once(
+            tui_surface.cursor_view.1 as usize * bounds.width as usize
+                + tui_surface.cursor_view.0 as usize,
+        ))
+        .collect::<Vec<_>>();
+    for index in cell_indexes {
+        if let Some(to_render) = rendered.get(index) {
+            append_rendered(&tui_surface, to_render, &mut index_offset, wgpu_vertices);
+        }
+    }
+
+    queue.submit([]);
+}
+
+fn append_dirty_rows(
+    bounds: ratatui_core::layout::Size,
+    tui_surface: &mut TuiSurface,
+    wgpu_post_process: &dyn PostProcessor,
+    rendered: &Vec<Rendered>,
+    wgpu_vertices: &mut WgpuVertices,
+    queue: &Queue,
+) {
+    if wgpu_post_process.needs_update() || tui_surface.dirty_rows.any() {
+        wgpu_vertices.bg_vertices.clear();
+        wgpu_vertices.text_vertices.clear();
+        wgpu_vertices.text_indices.clear();
+
+        let mut index_offset = 0;
+        for row in tui_surface.dirty_rows.iter_ones() {
+            let row_index = row * bounds.width as usize;
+            for col_index in 0..bounds.width as usize {
+                let index = row_index + col_index;
+
+                let to_render = &rendered[index];
+                append_rendered(&tui_surface, to_render, &mut index_offset, wgpu_vertices);
+            }
+        }
+
+        tui_surface
+            .dirty_rows
+            .iter_mut()
+            .for_each(|mut v| *v = false);
+
+        queue.submit([]);
+    }
 }
 
 fn append_rendered(
@@ -628,163 +980,21 @@ fn append_rendered(
     }
 }
 
-fn render(
-    bounds: WindowSize,
-    font_box: FontBox,
-    reset_bg: Rgb,
-    base: &WgpuBase,
-    pipeline: &WgpuPipeline,
-    post_process: &mut dyn PostProcessor,
-    vertices: &WgpuVertices,
-) {
-    let mut encoder = base
-        .device
-        .create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Draw Encoder"),
-        });
-
-    if !vertices.text_vertices.is_empty() {
-        {
-            let mut uniforms = base
-                .queue
-                .write_buffer_with(
-                    &pipeline.text_screen_size_buffer,
-                    0,
-                    NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap(),
-                )
-                .unwrap();
-            uniforms.copy_from_slice(bytemuck::cast_slice(&[
-                bounds.columns_rows.width as f32 * font_box.width as f32,
-                bounds.columns_rows.height as f32 * font_box.height as f32,
-                0.0,
-                0.0,
-            ]));
-        }
-
-        let bg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Text Bg Vertices"),
-            contents: bytemuck::cast_slice(&vertices.bg_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        let fg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Text Vertices"),
-            contents: bytemuck::cast_slice(&vertices.text_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        let indices = base.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Text Indices"),
-            contents: bytemuck::cast_slice(&vertices.text_indices),
-            usage: BufferUsages::INDEX,
-        });
-
-        {
-            let mut text_render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Text Render Pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &base.text_dest_view,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Load,
-                        store: StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                ..Default::default()
-            });
-
-            text_render_pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-
-            text_render_pass.set_pipeline(&pipeline.text_bg_compositor.pipeline);
-            text_render_pass.set_bind_group(0, &pipeline.text_bg_compositor.fs_uniforms, &[]);
-            text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
-            text_render_pass.draw_indexed(0..(vertices.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
-
-            text_render_pass.set_pipeline(&pipeline.text_fg_compositor.pipeline);
-            text_render_pass.set_bind_group(0, &pipeline.text_fg_compositor.fs_uniforms, &[]);
-            text_render_pass.set_bind_group(1, &pipeline.text_fg_compositor.atlas_bindings, &[]);
-
-            text_render_pass.set_vertex_buffer(0, fg_vertices.slice(..));
-            text_render_pass.draw_indexed(
-                0..(vertices.text_vertices.len() as u32 / 4) * 6,
-                0,
-                0..1,
-            );
-        }
-    }
-
-    let Some(texture) = base.surface.get_current_texture() else {
-        return;
-    };
-
-    let bg_color_u32 = u32::from_le_bytes([reset_bg[0], reset_bg[1], reset_bg[2], 255]);
-
-    post_process.process(
-        bg_color_u32,
-        &mut encoder,
-        &base.queue,
-        &base.text_dest_view,
-        &base.surface_config,
-        texture.get_view(),
-    );
-
-    base.queue.submit(Some(encoder.finish()));
-    texture.present();
-}
-
 impl<'s> Backend for WgpuBackend<'_, 's> {
     fn draw<'a, I>(
         &mut self,
-        content: I,
+        mut content: I,
     ) -> std::io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
         let bounds = self.size()?;
-
-        self.tui_surface
-            .cells
-            .resize(bounds.height as usize * bounds.width as usize, Cell::EMPTY);
-        self.tui_surface
-            .cell_remap
-            .resize(bounds.height as usize * bounds.width as usize, 0);
-        self.rendered.resize_with(
-            bounds.height as usize * bounds.width as usize,
-            Rendered::default,
+        draw_tui(
+            bounds,
+            &mut content,
+            &mut self.tui_surface,
+            &mut self.rendered,
         );
-        self.tui_surface
-            .fast_blinking
-            .resize(bounds.height as usize * bounds.width as usize, false);
-        self.tui_surface
-            .slow_blinking
-            .resize(bounds.height as usize * bounds.width as usize, false);
-        self.tui_surface
-            .dirty_rows
-            .resize(bounds.height as usize, true);
-
-        for (x, y, cell) in content {
-            let offset = y as usize * bounds.width as usize;
-            let index = offset + x as usize;
-
-            self.tui_surface
-                .fast_blinking
-                .set(index, cell.modifier.contains(Modifier::RAPID_BLINK));
-            self.tui_surface
-                .slow_blinking
-                .set(index, cell.modifier.contains(Modifier::SLOW_BLINK));
-
-            for i in 1..self.tui_surface.cells[index].symbol().width() {
-                self.tui_surface.cells[index + i] = ONE_CELL;
-            }
-            self.tui_surface.cells[index] = cell.clone();
-            for i in 1..self.tui_surface.cells[index].symbol().width() {
-                self.tui_surface.cells[index + i] = NULL_CELL;
-            }
-
-            self.tui_surface.dirty_rows.set(y as usize, true);
-        }
-
         Ok(())
     }
 
@@ -798,24 +1008,26 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         Ok(())
     }
 
-    fn get_cursor_position(&mut self) -> std::io::Result<Position> {
-        Ok(Position::new(
+    fn get_cursor_position(&mut self) -> std::io::Result<ratatui_core::layout::Position> {
+        Ok(ratatui_core::layout::Position::new(
             self.tui_surface.cursor.0,
             self.tui_surface.cursor.1,
         ))
     }
 
-    fn set_cursor_position<Pos: Into<Position>>(
+    fn set_cursor_position<Pos: Into<ratatui_core::layout::Position>>(
         &mut self,
         position: Pos,
     ) -> std::io::Result<()> {
         let bounds = self.size()?;
-        let pos: Position = position.into();
+        let pos = position.into();
+
         self.tui_surface.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
         self.tui_surface.cursor_view = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1)); // TODO
         self.tui_surface
             .dirty_rows
             .set(self.tui_surface.cursor.1 as usize, true);
+
         Ok(())
     }
 
@@ -831,12 +1043,12 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         Ok(())
     }
 
-    fn size(&self) -> std::io::Result<Size> {
+    fn size(&self) -> std::io::Result<ratatui_core::layout::Size> {
         let font_box = self.fonts.font_box();
         let width = self.wgpu_base.surface_config.width;
         let height = self.wgpu_base.surface_config.height;
 
-        Ok(Size {
+        Ok(ratatui_core::layout::Size {
             width: (width / font_box.width) as u16,
             height: (height / font_box.height) as u16,
         })
@@ -848,11 +1060,11 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let height = self.wgpu_base.surface_config.height;
 
         Ok(WindowSize {
-            columns_rows: Size {
+            columns_rows: ratatui_core::layout::Size {
                 width: (width / font_box.width) as u16,
                 height: (height / font_box.height) as u16,
             },
-            pixels: Size {
+            pixels: ratatui_core::layout::Size {
                 width: width as u16,
                 height: height as u16,
             },
@@ -862,196 +1074,37 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     fn flush(&mut self) -> std::io::Result<()> {
         let bounds = self.size()?;
 
-        // always show cursor on flush.
-        self.tui_surface.cursor_showing = true;
-        // reset blink, removes flickering.
-        self.tui_surface.cursor_blink = 0;
+        flush_tui(
+            bounds,
+            &self.fonts,
+            &mut self.tui_surface,
+            &mut self.rendered,
+            &mut self.wgpu_atlas,
+            &self.wgpu_base.queue,
+            &mut self.tmp_plan_cache,
+            &mut self.tmp_rowbuf,
+            &mut self.tmp_rowbuf_to_cell,
+            &mut self.tmp_buffer,
+        );
 
-        for (row_idx, row_cells) in self
-            .tui_surface
-            .cells
-            .chunks(bounds.width as usize)
-            .enumerate()
-        {
-            if !self.tui_surface.dirty_rows[row_idx] {
-                continue;
-            }
+        append_dirty_rows(
+            bounds,
+            &mut self.tui_surface,
+            self.wgpu_post_process.as_ref(),
+            &self.rendered,
+            &mut self.wgpu_vertices,
+            &self.wgpu_base.queue,
+        );
 
-            let row_offset = row_idx.min(bounds.height as usize - 1) * bounds.width as usize;
-
-            // This block concatenates the strings for the row into one string for bidi
-            // resolution, then maps bytes for the string to their associated cell index. It
-            // also maps the row's cell index to the font that can source all glyphs for
-            // that cell.
-            self.tmp_rowbuf.clear();
-            self.tmp_rowbuf_to_cell.clear();
-
-            let mut fontmap = Vec::with_capacity(self.tmp_rowbuf_to_cell.capacity());
-            for (cell_idx, cell) in row_cells.iter().enumerate() {
-                if !cell.skip {
-                    self.tmp_rowbuf.push_str(cell.symbol());
-                    self.tmp_rowbuf_to_cell.resize(
-                        self.tmp_rowbuf_to_cell.len() + cell.symbol().len(),
-                        cell_idx as u16,
-                    );
-                }
-
-                self.tui_surface.cell_remap[row_offset + cell_idx] = cell_idx as u16;
-
-                fontmap.push(self.fonts.font_for_cell(cell));
-            }
-
-            // rebuild from scratch
-            for cell_idx in 0..bounds.width as usize {
-                self.rendered[row_offset + cell_idx].clear();
-            }
-
-            // run text shaping
-            let bidi = ParagraphBidiInfo::new(&self.tmp_rowbuf, None);
-            let (levels, runs) = bidi.visual_runs(0..bidi.levels.len());
-
-            let (
-                mut current_font,
-                mut current_fake_bold,
-                mut current_fake_italic,
-                mut current_is_fallback,
-            ) = fontmap[0];
-            let mut current_level = Level::ltr();
-
-            for (level, range) in runs.into_iter().map(|run| (levels[run.start], run)) {
-                let bidi_run_chars = &self.tmp_rowbuf[range.clone()];
-                let bidi_run_cells = &self.tmp_rowbuf_to_cell[range.clone()];
-                let min_cell_idx = *bidi_run_cells.first().expect("first") as usize;
-                let max_cell_idx = *bidi_run_cells.last().expect("last") as usize;
-
-                for (ch_idx, ch) in bidi_run_chars.char_indices() {
-                    let cell_idx = bidi_run_cells[ch_idx] as usize;
-
-                    let (font, fake_bold, fake_italic, is_fallback) = fontmap[cell_idx];
-                    if font.id() != current_font.id()
-                        || current_fake_bold != fake_bold
-                        || current_fake_italic != fake_italic
-                        || current_is_fallback != is_fallback
-                        || current_level != level
-                    {
-                        let mut buffer = mem::take(&mut self.tmp_buffer);
-
-                        self.tmp_buffer = shape(
-                            &self.wgpu_base,
-                            row_idx,
-                            row_cells,
-                            &self.tui_surface.cell_remap
-                                [row_offset..row_offset + bounds.width as usize],
-                            &self.tmp_rowbuf_to_cell,
-                            shape_with_plan(
-                                current_font.font(),
-                                self.plan_cache.get(current_font, &mut buffer),
-                                buffer,
-                            ),
-                            RenderedFont {
-                                font_box: self.fonts.font_box(),
-                                font: current_font,
-                                fake_bold: current_fake_bold,
-                                fake_italic: current_fake_italic,
-                                is_fallback: current_is_fallback,
-                            },
-                            self.tui_surface.cursor_visible,
-                            self.tui_surface.cursor,
-                            &mut self.rendered[row_offset..row_offset + bounds.width as usize],
-                            &mut self.wgpu_atlas,
-                        );
-                    }
-
-                    if level.is_rtl() {
-                        // rtl flip visible cell index for this run.
-                        let view_idx = (max_cell_idx - (cell_idx - min_cell_idx)) as u16;
-
-                        if (cell_idx as u16, row_idx as u16) == self.tui_surface.cursor {
-                            self.tui_surface.cursor_view = (view_idx, row_idx as u16);
-                            self.tui_surface.cursor_style = self.tui_surface.cursor_style.to_rtl();
-                        }
-
-                        self.tui_surface.cell_remap[row_offset + cell_idx] = view_idx;
-                    } else {
-                        if (cell_idx as u16, row_idx as u16) == self.tui_surface.cursor {
-                            self.tui_surface.cursor_style = self.tui_surface.cursor_style.to_ltr();
-                        }
-                    }
-
-                    self.tmp_buffer.add(ch, (range.start + ch_idx) as u32);
-
-                    current_font = font;
-                    current_fake_bold = fake_bold;
-                    current_fake_italic = fake_italic;
-                    current_is_fallback = is_fallback;
-                    current_level = level;
-                }
-            }
-
-            let mut buffer = mem::take(&mut self.tmp_buffer);
-            self.tmp_buffer = shape(
-                &self.wgpu_base,
-                row_idx,
-                row_cells,
-                &self.tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
-                &self.tmp_rowbuf_to_cell,
-                shape_with_plan(
-                    current_font.font(),
-                    self.plan_cache.get(current_font, &mut buffer),
-                    buffer,
-                ),
-                RenderedFont {
-                    font_box: self.fonts.font_box(),
-                    font: current_font,
-                    fake_bold: current_fake_bold,
-                    fake_italic: current_fake_italic,
-                    is_fallback: current_is_fallback,
-                },
-                self.tui_surface.cursor_visible,
-                self.tui_surface.cursor,
-                &mut self.rendered[row_offset..row_offset + bounds.width as usize],
-                &mut self.wgpu_atlas,
-            );
-        }
-
-        if self.wgpu_post_process.needs_update() || self.tui_surface.dirty_rows.any() {
-            self.wgpu_vertices.bg_vertices.clear();
-            self.wgpu_vertices.text_vertices.clear();
-            self.wgpu_vertices.text_indices.clear();
-
-            let mut index_offset = 0;
-            for row in self.tui_surface.dirty_rows.iter_ones() {
-                let row_index = row * bounds.width as usize;
-                for col_index in 0..bounds.width as usize {
-                    let index = row_index + col_index;
-
-                    let to_render = &self.rendered[index];
-                    append_rendered(
-                        &self.tui_surface,
-                        to_render,
-                        &mut index_offset,
-                        &mut self.wgpu_vertices,
-                    );
-                }
-            }
-
-            self.tui_surface
-                .dirty_rows
-                .iter_mut()
-                .for_each(|mut v| *v = false);
-
-            self.wgpu_base.queue.submit([]);
-
-            render(
-                self.window_size().expect("window_size"),
-                self.fonts.font_box(),
-                self.tui_surface.reset_bg,
-                &self.wgpu_base,
-                &self.wgpu_pipeline,
-                self.wgpu_post_process.as_mut(),
-                &self.wgpu_vertices,
-            );
-        }
+        render(
+            self.window_size().expect("window_size"),
+            self.fonts.font_box(),
+            self.tui_surface.reset_bg,
+            &self.wgpu_base,
+            &self.wgpu_pipeline,
+            self.wgpu_post_process.as_mut(),
+            &self.wgpu_vertices,
+        );
 
         Ok(())
     }
@@ -1103,7 +1156,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 // This ensures that the output is mostly cell-aligned and makes
 // the final result more predictable.
 fn shape(
-    wgpu_base: &WgpuBase,
     y: usize,
     row: &[Cell],
     cell_remap: &[u16],
@@ -1114,6 +1166,7 @@ fn shape(
     cursor: (u16, u16),
     rendered: &mut [Rendered],
     wgpu_atlas: &mut WgpuAtlas,
+    queue: &Queue,
 ) -> UnicodeBuffer {
     let metrics = font.font();
     let advance_scale = font.font_box.scale;
@@ -1243,7 +1296,7 @@ fn shape(
             font.is_fallback,
         );
 
-        wgpu_base.queue.write_texture(
+        queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &wgpu_atlas.text_cache,
                 mip_level: 0,
@@ -1267,7 +1320,7 @@ fn shape(
             },
         );
 
-        wgpu_base.queue.write_texture(
+        queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &wgpu_atlas.text_mask,
                 mip_level: 0,
