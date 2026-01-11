@@ -650,6 +650,11 @@ fn flush_tui(
             for (ch_idx, ch) in bidi_run_chars.char_indices() {
                 let cell_idx = bidi_run_cells[ch_idx] as usize;
 
+                if ch.general_category() == GeneralCategory::Format {
+                    // skip Format, no longer needed after bidi. probably?
+                    continue;
+                }
+
                 let (font, fake_bold, fake_italic, is_fallback) = fontmap[cell_idx];
                 if font.id() != current_font.id()
                     || current_fake_bold != fake_bold
@@ -1207,11 +1212,6 @@ fn shape(
             .chars()
             .next()
             .unwrap_or_default();
-        let ch_category = ch.general_category();
-
-        if ch_category == GeneralCategory::Format {
-            continue;
-        }
 
         // Every cell has it's defined position on the grid.
         // This position is used as a starting point from which
@@ -1232,13 +1232,7 @@ fn shape(
 
         // if we have a combining '.undef'. skip it completely.
         if last_cell_idx == Some(cell_idx) {
-            if matches!(
-                ch_category,
-                GeneralCategory::NonspacingMark
-                    | GeneralCategory::SpacingMark
-                    | GeneralCategory::EnclosingMark
-            ) && info.glyph_id == 0
-            {
+            if ch.general_category_group() == GeneralCategoryGroup::Mark && info.glyph_id == 0 {
                 continue;
             }
         }
