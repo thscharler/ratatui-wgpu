@@ -2,6 +2,7 @@ use std::mem::size_of;
 use std::num::NonZeroU64;
 
 use crate::backend::{PostProcessor, PostProcessorBuilder};
+use crate::fonts::FontBox;
 use web_time::Instant;
 use wgpu::include_wgsl;
 use wgpu::AddressMode;
@@ -81,6 +82,7 @@ pub type AspectPreservingPostProcessorBuilder = DefaultPostProcessorBuilder<true
 /// of the character size. Use `AspectPreservingDefaultPostProcessor` if you
 /// don't want this behavior.
 pub struct DefaultPostProcessor<const PRESERVE_ASPECT: bool = false> {
+    size: (u32, u32),
     uniforms: Buffer,
     bindings: BindGroupLayout,
     sampler: Sampler,
@@ -190,6 +192,8 @@ impl<const PRESERVE_ASPECT: bool> PostProcessorBuilder
             cache: None,
         });
 
+        let size = (surface_config.width, surface_config.height);
+
         let blitter = build_blitter(
             device,
             &layout,
@@ -201,6 +205,7 @@ impl<const PRESERVE_ASPECT: bool> PostProcessorBuilder
         );
 
         DefaultPostProcessor {
+            size,
             uniforms,
             bindings: layout,
             sampler,
@@ -211,12 +216,25 @@ impl<const PRESERVE_ASPECT: bool> PostProcessorBuilder
 }
 
 impl<const PRESERVE_ASPECT: bool> PostProcessor for DefaultPostProcessor<PRESERVE_ASPECT> {
+    fn map_to_cell(
+        &self,
+        scr_x: u32,
+        scr_y: u32,
+        font_box: FontBox,
+    ) -> (u16, u16) {
+        (
+            (scr_x / font_box.width) as u16,
+            (scr_y / font_box.height) as u16,
+        )
+    }
+
     fn resize(
         &mut self,
         device: &Device,
         text_view: &TextureView,
         surface_config: &SurfaceConfiguration,
     ) {
+        self.size = (surface_config.width, surface_config.height);
         self.blitter = build_blitter(
             device,
             &self.bindings,
@@ -762,6 +780,18 @@ impl PostProcessorBuilder for CrtPostProcessorBuilder {
 }
 
 impl PostProcessor for CrtPostProcessor {
+    fn map_to_cell(
+        &self,
+        scr_x: u32,
+        scr_y: u32,
+        font_box: FontBox,
+    ) -> (u16, u16) {
+        (
+            (scr_x / font_box.width) as u16,
+            (scr_y / font_box.height) as u16,
+        )
+    }
+
     fn resize(
         &mut self,
         device: &Device,

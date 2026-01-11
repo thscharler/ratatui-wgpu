@@ -190,8 +190,30 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     pub fn pos_to_cell(
         &self,
         pos: (u32, u32),
-    ) -> ratatui_core::layout::Position {
-        todo!();
+    ) -> (u16, u16) {
+        let font_box = self.fonts.font_box();
+        if font_box.width == 0 || font_box.height == 0 {
+            // might happen during resize or before the first render.
+            return (0, 0);
+        }
+
+        let (cell_x, cell_y) =
+            self.wgpu_post_process
+                .map_to_cell(pos.0, pos.1, self.fonts.font_box());
+
+        let bounds = self.size().unwrap();
+        let offset = (cell_y * bounds.width) as usize;
+        if self.tui_surface.cell_remap.len() < offset + bounds.width as usize {
+            // might happen during resize or before the first render.
+            return (cell_x, cell_y);
+        }
+        for cell in 0..bounds.width {
+            if self.tui_surface.cell_remap[offset + cell as usize] == cell_x {
+                return (cell, cell_y);
+            }
+        }
+
+        (cell_x, cell_y)
     }
 
     /// Get the [`PostProcessor`] associated with this backend.
@@ -1025,7 +1047,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let pos = position.into();
 
         self.tui_surface.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
-        self.tui_surface.cursor_view = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1)); // TODO
+        self.tui_surface.cursor_view = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
         self.tui_surface
             .dirty_rows
             .set(self.tui_surface.cursor.1 as usize, true);

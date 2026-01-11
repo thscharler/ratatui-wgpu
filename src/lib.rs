@@ -201,4 +201,5 @@ pub use backend::PostProcessor;
 pub use backend::PostProcessorBuilder;
 pub use colors::ColorTable;
 pub use fonts::Font;
+pub use fonts::FontBox;
 pub use fonts::Fonts;

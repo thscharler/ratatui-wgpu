@@ -20,6 +20,7 @@ use wgpu::TextureUsages;
 use wgpu::TextureView;
 use wgpu::TextureViewDescriptor;
 use wgpu::{Adapter, Buffer, Texture};
+use crate::fonts::FontBox;
 
 pub trait PostProcessorBuilder {
     /// Resulting postprocessor.
@@ -38,6 +39,14 @@ pub trait PostProcessorBuilder {
 
 /// A pipeline for post-processing rendered text.
 pub trait PostProcessor {
+    /// Map the screen-coordinates to cell-coordinates.
+    fn map_to_cell(
+        &self,
+        scr_x: u32,
+        scr_y: u32,
+        font_box: FontBox,
+    ) -> (u16, u16);
+
     /// Called after the drawing dimensions have changed (e.g. the surface was
     /// resized).
     fn resize(

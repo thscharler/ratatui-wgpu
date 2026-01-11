@@ -14,7 +14,7 @@ pub struct Font<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct FontBox {
+pub struct FontBox {
     pub width: u32,
     pub height: u32,
     pub ascender: f32,
