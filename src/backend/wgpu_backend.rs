@@ -636,16 +636,23 @@ fn flush_tui(
             fontmap.push(fonts.font_for_cell(cell));
         }
 
+        // run text shaping
+        let bidi = ParagraphBidiInfo::new(&tmp_rowbuf, None);
+        let (levels, runs) = bidi.visual_runs(0..bidi.levels.len());
+
+        // when bidi kicks in dirty_cell ceases to work...
+        if runs.len() > 1 {
+            for cell_idx in 0..bounds.width as usize {
+                tui_surface.dirty_cells.set(row_offset + cell_idx, true);
+            }
+        }
+
         // rebuild from scratch
         for cell_idx in 0..bounds.width as usize {
             if tui_surface.dirty_cells[row_offset + cell_idx] {
                 rendered[row_offset + cell_idx].clear();
             }
         }
-
-        // run text shaping
-        let bidi = ParagraphBidiInfo::new(&tmp_rowbuf, None);
-        let (levels, runs) = bidi.visual_runs(0..bidi.levels.len());
 
         let (
             mut current_font,
