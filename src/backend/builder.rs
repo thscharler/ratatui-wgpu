@@ -610,8 +610,15 @@ where
             .compile(&device, &wgpu_view, &surface_config);
 
         Ok(WgpuBackend {
-            state: BackendState {
-                fonts: self.fonts,
+            state: BackendState { fonts: self.fonts },
+            tui_surface: TuiSurface {
+                cells: vec![],
+                cell_remap: vec![],
+                dirty_rows: Default::default(),
+                fast_blinking: Default::default(),
+                slow_blinking: Default::default(),
+                cursor: (0, 0),
+                cursor_view: (0, 0),
                 colors: self.colors,
                 reset_fg,
                 reset_bg,
@@ -626,15 +633,6 @@ where
                 fast_blink_showing: true,
                 slow_blink_divisor: self.slow_blink,
                 slow_blink_showing: true,
-            },
-            tui_surface: TuiSurface {
-                cells: vec![],
-                cell_remap: vec![],
-                dirty_rows: Default::default(),
-                fast_blinking: Default::default(),
-                slow_blinking: Default::default(),
-                cursor: (0, 0),
-                cursor_view: (0, 0),
             },
             rendered: vec![],
 

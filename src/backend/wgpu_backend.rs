@@ -91,17 +91,9 @@ pub(crate) struct TuiSurface {
     pub(super) dirty_rows: BitVec,
     pub(super) fast_blinking: BitVec,
     pub(super) slow_blinking: BitVec,
+
     pub(super) cursor: (u16, u16),
     pub(super) cursor_view: (u16, u16),
-}
-
-pub(crate) struct BackendState<'f> {
-    // backend state flags
-    pub(super) fonts: Fonts<'f>,
-    pub(super) colors: ColorTable,
-    pub(super) reset_fg: Rgb,
-    pub(super) reset_bg: Rgb,
-
     pub(super) cursor_color: ratatui_core::style::Color,
     pub(super) cursor_style: CursorStyle,
     pub(super) cursor_visible: bool,
@@ -114,6 +106,15 @@ pub(crate) struct BackendState<'f> {
     pub(super) fast_blink_showing: bool,
     pub(super) slow_blink_divisor: u8,
     pub(super) slow_blink_showing: bool,
+
+    pub(super) colors: ColorTable,
+    pub(super) reset_fg: Rgb,
+    pub(super) reset_bg: Rgb,
+}
+
+pub(crate) struct BackendState<'f> {
+    // backend state flags
+    pub(super) fonts: Fonts<'f>,
 }
 
 /// A ratatui backend leveraging wgpu for rendering.
@@ -155,14 +156,14 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         color: ratatui_core::style::Color,
     ) {
-        self.state.reset_bg = self.state.colors.c2c(color, [0; 3]);
+        self.tui_surface.reset_bg = self.tui_surface.colors.c2c(color, [0; 3]);
     }
 
     pub fn set_fg_color(
         &mut self,
         color: ratatui_core::style::Color,
     ) {
-        self.state.reset_fg = self.state.colors.c2c(color, [255; 3]);
+        self.tui_surface.reset_fg = self.tui_surface.colors.c2c(color, [255; 3]);
     }
 
     /// Set the cursor style
@@ -170,12 +171,12 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         style: CursorStyle,
     ) {
-        self.state.cursor_style = style;
+        self.tui_surface.cursor_style = style;
     }
 
     /// Current cursor style.
     pub fn cursor_style(&self) -> CursorStyle {
-        self.state.cursor_style
+        self.tui_surface.cursor_style
     }
 
     /// Set the cursor color.
@@ -183,12 +184,12 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         &mut self,
         color: ratatui_core::style::Color,
     ) {
-        self.state.cursor_color = color;
+        self.tui_surface.cursor_color = color;
     }
 
     /// Current cursor color.
     pub fn cursor_color(&self) -> ratatui_core::style::Color {
-        self.state.cursor_color
+        self.tui_surface.cursor_color
     }
 
     /// Map a physical cursor position to a col/row position.
@@ -278,7 +279,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         new_colors: ColorTable,
     ) {
         self.tui_surface.dirty_rows.clear();
-        self.state.colors = new_colors;
+        self.tui_surface.colors = new_colors;
     }
 
     /// Update the fonts used for rendering. This will cause a full repaint of
@@ -350,23 +351,23 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.wgpu_vertices.text_vertices.clear();
         self.wgpu_vertices.text_indices.clear();
 
-        self.state.blink = self.state.blink.wrapping_add(1);
-        self.state.cursor_blink = self.state.cursor_blink.wrapping_add(1);
+        self.tui_surface.blink = self.tui_surface.blink.wrapping_add(1);
+        self.tui_surface.cursor_blink = self.tui_surface.cursor_blink.wrapping_add(1);
 
-        if self.state.fast_blink_divisor != 0
-            && self.state.blink % self.state.fast_blink_divisor == 0
+        if self.tui_surface.fast_blink_divisor != 0
+            && self.tui_surface.blink % self.tui_surface.fast_blink_divisor == 0
         {
-            self.state.fast_blink_showing = !self.state.fast_blink_showing;
+            self.tui_surface.fast_blink_showing = !self.tui_surface.fast_blink_showing;
         }
-        if self.state.slow_blink_divisor != 0
-            && self.state.blink % self.state.slow_blink_divisor == 0
+        if self.tui_surface.slow_blink_divisor != 0
+            && self.tui_surface.blink % self.tui_surface.slow_blink_divisor == 0
         {
-            self.state.slow_blink_showing = !self.state.slow_blink_showing;
+            self.tui_surface.slow_blink_showing = !self.tui_surface.slow_blink_showing;
         }
-        if self.state.cursor_divisor != 0
-            && self.state.cursor_blink % self.state.cursor_divisor == 0
+        if self.tui_surface.cursor_divisor != 0
+            && self.tui_surface.cursor_blink % self.tui_surface.cursor_divisor == 0
         {
-            self.state.cursor_showing = !self.state.cursor_showing;
+            self.tui_surface.cursor_showing = !self.tui_surface.cursor_showing;
         }
 
         let mut index_offset = 0;
@@ -384,7 +385,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         for index in cell_indexes {
             if let Some(to_render) = self.rendered.get(index) {
                 append_rendered(
-                    &self.state,
+                    &self.tui_surface,
                     to_render,
                     &mut index_offset,
                     &mut self.wgpu_vertices,
@@ -397,7 +398,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         render(
             self.window_size().expect("window_size"),
             self.state.fonts.font_box(),
-            self.state.reset_bg,
+            self.tui_surface.reset_bg,
             &self.wgpu_base,
             &self.wgpu_pipeline,
             self.wgpu_post_process.as_mut(),
@@ -449,7 +450,7 @@ fn rebuild_surface(
 }
 
 fn append_rendered(
-    state: &BackendState<'_>,
+    tui_surface: &TuiSurface,
     to_render: &Rendered,
     index_offset: &mut u32,
     vertices: &mut WgpuVertices,
@@ -471,8 +472,8 @@ fn append_rendered(
     ) in to_render.iter()
     {
         let alpha = if modifier.contains(Modifier::HIDDEN)
-            | (modifier.contains(Modifier::RAPID_BLINK) && !state.fast_blink_showing)
-            | (modifier.contains(Modifier::SLOW_BLINK) && !state.slow_blink_showing)
+            | (modifier.contains(Modifier::RAPID_BLINK) && !tui_surface.fast_blink_showing)
+            | (modifier.contains(Modifier::SLOW_BLINK) && !tui_surface.slow_blink_showing)
         {
             0
         } else if modifier.contains(Modifier::DIM) {
@@ -483,23 +484,25 @@ fn append_rendered(
 
         let reverse = modifier.contains(Modifier::REVERSED);
         let fg_color = if reverse {
-            state.colors.c2c(*bg, state.reset_bg)
+            tui_surface.colors.c2c(*bg, tui_surface.reset_bg)
         } else {
-            state.colors.c2c(*fg, state.reset_fg)
+            tui_surface.colors.c2c(*fg, tui_surface.reset_fg)
         };
         let fg_color_u32: u32 = u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], alpha]);
 
-        let cursor_color_u32 = if state.cursor_color != ratatui_core::style::Color::Reset {
-            let cur_color = state.colors.c2c(state.cursor_color, state.reset_fg);
+        let cursor_color_u32 = if tui_surface.cursor_color != ratatui_core::style::Color::Reset {
+            let cur_color = tui_surface
+                .colors
+                .c2c(tui_surface.cursor_color, tui_surface.reset_fg);
             u32::from_le_bytes([cur_color[0], cur_color[1], cur_color[2], 99])
         } else {
             u32::from_le_bytes([fg_color[0], fg_color[1], fg_color[2], 99])
         };
 
         let bg_color = if reverse {
-            state.colors.c2c(*fg, state.reset_fg)
+            tui_surface.colors.c2c(*fg, tui_surface.reset_fg)
         } else {
-            state.colors.c2c(*bg, state.reset_bg)
+            tui_surface.colors.c2c(*bg, tui_surface.reset_bg)
         };
         let bg_color_u32 = u32::from_le_bytes([bg_color[0], bg_color[1], bg_color[2], 255]);
 
@@ -509,8 +512,11 @@ fn append_rendered(
             ((*strikeout_pos_min as u32 + cached.y) << 16) | (*strikeout_pos_max as u32 + cached.y);
 
         let mut cursor_pos = 0x0000_0000;
-        if state.cursor_visible && state.cursor_showing && cursor_pos_min != cursor_pos_max {
-            match state.cursor_style {
+        if tui_surface.cursor_visible
+            && tui_surface.cursor_showing
+            && cursor_pos_min != cursor_pos_max
+        {
+            match tui_surface.cursor_style {
                 CursorStyle::Block => {
                     cursor_pos = 0x0002_0000 | cached.width << 8 | 0x0000_0000;
                     // horizontal
@@ -756,7 +762,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         self.tui_surface
             .slow_blinking
             .resize(bounds.height as usize * bounds.width as usize, false);
-        self.tui_surface.dirty_rows.resize(bounds.height as usize, true);
+        self.tui_surface
+            .dirty_rows
+            .resize(bounds.height as usize, true);
 
         for (x, y, cell) in content {
             let offset = y as usize * bounds.width as usize;
@@ -784,17 +792,20 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
     }
 
     fn hide_cursor(&mut self) -> std::io::Result<()> {
-        self.state.cursor_visible = false;
+        self.tui_surface.cursor_visible = false;
         Ok(())
     }
 
     fn show_cursor(&mut self) -> std::io::Result<()> {
-        self.state.cursor_visible = true;
+        self.tui_surface.cursor_visible = true;
         Ok(())
     }
 
     fn get_cursor_position(&mut self) -> std::io::Result<Position> {
-        Ok(Position::new(self.tui_surface.cursor.0, self.tui_surface.cursor.1))
+        Ok(Position::new(
+            self.tui_surface.cursor.0,
+            self.tui_surface.cursor.1,
+        ))
     }
 
     fn set_cursor_position<Pos: Into<Position>>(
@@ -853,11 +864,16 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let bounds = self.size()?;
 
         // always show cursor on flush.
-        self.state.cursor_showing = true;
+        self.tui_surface.cursor_showing = true;
         // reset blink, removes flickering.
-        self.state.cursor_blink = 0;
+        self.tui_surface.cursor_blink = 0;
 
-        for (row_idx, row_cells) in self.tui_surface.cells.chunks(bounds.width as usize).enumerate() {
+        for (row_idx, row_cells) in self
+            .tui_surface
+            .cells
+            .chunks(bounds.width as usize)
+            .enumerate()
+        {
             if !self.tui_surface.dirty_rows[row_idx] {
                 continue;
             }
@@ -925,7 +941,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                             &self.wgpu_base,
                             row_idx,
                             row_cells,
-                            &self.tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
+                            &self.tui_surface.cell_remap
+                                [row_offset..row_offset + bounds.width as usize],
                             &self.tmp_rowbuf_to_cell,
                             shape_with_plan(
                                 current_font.font(),
@@ -939,7 +956,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                                 fake_italic: current_fake_italic,
                                 is_fallback: current_is_fallback,
                             },
-                            self.state.cursor_visible,
+                            self.tui_surface.cursor_visible,
                             self.tui_surface.cursor,
                             &mut self.rendered[row_offset..row_offset + bounds.width as usize],
                             &mut self.wgpu_atlas,
@@ -952,13 +969,13 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                         if (cell_idx as u16, row_idx as u16) == self.tui_surface.cursor {
                             self.tui_surface.cursor_view = (view_idx, row_idx as u16);
-                            self.state.cursor_style = self.state.cursor_style.to_rtl();
+                            self.tui_surface.cursor_style = self.tui_surface.cursor_style.to_rtl();
                         }
 
                         self.tui_surface.cell_remap[row_offset + cell_idx] = view_idx;
                     } else {
                         if (cell_idx as u16, row_idx as u16) == self.tui_surface.cursor {
-                            self.state.cursor_style = self.state.cursor_style.to_ltr();
+                            self.tui_surface.cursor_style = self.tui_surface.cursor_style.to_ltr();
                         }
                     }
 
@@ -991,7 +1008,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                     fake_italic: current_fake_italic,
                     is_fallback: current_is_fallback,
                 },
-                self.state.cursor_visible,
+                self.tui_surface.cursor_visible,
                 self.tui_surface.cursor,
                 &mut self.rendered[row_offset..row_offset + bounds.width as usize],
                 &mut self.wgpu_atlas,
@@ -1011,7 +1028,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
                     let to_render = &self.rendered[index];
                     append_rendered(
-                        &self.state,
+                        &self.tui_surface,
                         to_render,
                         &mut index_offset,
                         &mut self.wgpu_vertices,
@@ -1029,7 +1046,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             render(
                 self.window_size().expect("window_size"),
                 self.state.fonts.font_box(),
-                self.state.reset_bg,
+                self.tui_surface.reset_bg,
                 &self.wgpu_base,
                 &self.wgpu_pipeline,
                 self.wgpu_post_process.as_mut(),
@@ -1059,7 +1076,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
                 Ok(())
             }
             ClearType::CurrentLine => {
-                self.tui_surface.cells[line_start..line_start + bounds.width as usize].fill(Cell::EMPTY);
+                self.tui_surface.cells[line_start..line_start + bounds.width as usize]
+                    .fill(Cell::EMPTY);
                 Ok(())
             }
             ClearType::UntilNewLine => {
