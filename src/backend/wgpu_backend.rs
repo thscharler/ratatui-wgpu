@@ -308,7 +308,9 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.fonts = new_fonts;
         self.tui_surface.dirty_rows.clear();
         self.tui_surface.dirty_cells.clear();
-        self.wgpu_atlas.cached.match_fonts(&self.fonts);
+        self.wgpu_atlas
+            .cached
+            .update_font_box(self.fonts.font_box());
 
         rebuild_surface(
             self.fonts.font_box(),
@@ -332,7 +334,9 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.fonts.add_fonts(new_fonts);
         self.tui_surface.dirty_rows.clear();
         self.tui_surface.dirty_cells.clear();
-        self.wgpu_atlas.cached.match_fonts(&self.fonts);
+        self.wgpu_atlas
+            .cached
+            .update_font_box(self.fonts.font_box());
 
         rebuild_surface(
             self.fonts.font_box(),
@@ -352,7 +356,9 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.tui_surface.dirty_rows.clear();
         self.tui_surface.dirty_cells.clear();
         self.fonts.set_size_px(new_font_size);
-        self.wgpu_atlas.cached.match_fonts(&self.fonts);
+        self.wgpu_atlas
+            .cached
+            .update_font_box(self.fonts.font_box());
 
         rebuild_surface(
             self.fonts.font_box(),
@@ -995,6 +1001,7 @@ fn append_rendered(
             uv: [uvx, uvy],
             uv_x0: uvx,
             fg_color: fg_color_u32,
+            color_glyph: cached.color as u32,
             underline_pos,
             strikeout_pos,
             cursor_pos,
@@ -1005,6 +1012,7 @@ fn append_rendered(
             uv: [uvx + width, uvy],
             uv_x0: uvx,
             fg_color: fg_color_u32,
+            color_glyph: cached.color as u32,
             underline_pos,
             strikeout_pos,
             cursor_pos,
@@ -1015,6 +1023,7 @@ fn append_rendered(
             uv: [uvx, uvy + height],
             uv_x0: uvx,
             fg_color: fg_color_u32,
+            color_glyph: cached.color as u32,
             underline_pos,
             strikeout_pos,
             cursor_pos,
@@ -1025,6 +1034,7 @@ fn append_rendered(
             uv: [uvx + width, uvy + height],
             uv_x0: uvx,
             fg_color: fg_color_u32,
+            color_glyph: cached.color as u32,
             underline_pos,
             strikeout_pos,
             cursor_pos,
@@ -1077,7 +1087,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
         // old cursor
         self.tui_surface.dirty_cells.set(
-            self.tui_surface.cursor.1 as usize * bounds.width as usize + self.tui_surface.cursor.0 as usize,
+            self.tui_surface.cursor.1 as usize * bounds.width as usize
+                + self.tui_surface.cursor.0 as usize,
             true,
         );
 
@@ -1086,7 +1097,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             .dirty_rows
             .set(self.tui_surface.cursor.1 as usize, true);
         self.tui_surface.dirty_cells.set(
-            self.tui_surface.cursor.1 as usize * bounds.width as usize + self.tui_surface.cursor.0 as usize,
+            self.tui_surface.cursor.1 as usize * bounds.width as usize
+                + self.tui_surface.cursor.0 as usize,
             true,
         );
 
@@ -1340,10 +1352,46 @@ fn shape(
             (0, 0)
         };
 
+        if cached.cached() {
+            rendered[cell_idx].insert(
+                (basex, basey, GlyphId(info.glyph_id as _)),
+                RenderInfo {
+                    cached: *cached,
+                    fg: cell.fg,
+                    bg: cell.bg,
+                    modifier: cell.modifier,
+                    underline_pos_min: underline_pos.0 as u16,
+                    underline_pos_max: underline_pos.1 as u16,
+                    strikeout_pos_min: strikeout_pos.0 as u16,
+                    strikeout_pos_max: strikeout_pos.1 as u16,
+                    cursor_pos_min: cursor_pos.0 as u16,
+                    cursor_pos_max: cursor_pos.1 as u16,
+                },
+            );
+
+            continue;
+        }
+
+        let is_emoji = ch.is_emoji_char();
+        let (cached, image) = rasterize_glyph(
+            cached,
+            metrics,
+            info,
+            font.fake_italic & !is_emoji,
+            font.fake_bold,
+            advance_scale,
+            font.font_box.ascender,
+            is_emoji,
+            font.is_fallback,
+        );
+
+        // remember colored flag for the glyph.
+        wgpu_atlas.cached.update_colored(&key, cached.color);
+
         rendered[cell_idx].insert(
             (basex, basey, GlyphId(info.glyph_id as _)),
             RenderInfo {
-                cached: *cached,
+                cached,
                 fg: cell.fg,
                 bg: cell.bg,
                 modifier: cell.modifier,
@@ -1354,23 +1402,6 @@ fn shape(
                 cursor_pos_min: cursor_pos.0 as u16,
                 cursor_pos_max: cursor_pos.1 as u16,
             },
-        );
-
-        if cached.cached() {
-            continue;
-        }
-
-        let is_emoji = ch.is_emoji_char();
-        let (cached, image, colored) = rasterize_glyph(
-            cached,
-            metrics,
-            info,
-            font.fake_italic & !is_emoji,
-            font.fake_bold,
-            advance_scale,
-            font.font_box.ascender,
-            is_emoji,
-            font.is_fallback,
         );
 
         queue.write_texture(
@@ -1396,47 +1427,9 @@ fn shape(
                 depth_or_array_layers: 1,
             },
         );
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &wgpu_atlas.text_mask,
-                mip_level: 0,
-                origin: Origin3d {
-                    x: cached.x,
-                    y: cached.y,
-                    z: 0,
-                },
-                aspect: TextureAspect::All,
-            },
-            &bg_mask(cached.width, cached.height, colored),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(cached.width),
-                rows_per_image: Some(cached.height),
-            },
-            Extent3d {
-                width: cached.width,
-                height: cached.height,
-                depth_or_array_layers: 1,
-            },
-        )
     }
 
     buffer.clear()
-}
-
-fn bg_mask(
-    width: u32,
-    height: u32,
-    color: bool,
-) -> Vec<u8> {
-    let width = width as usize;
-    let height = height as usize;
-    if color {
-        vec![255; width * height]
-    } else {
-        vec![0; width * height]
-    }
 }
 
 fn rasterize_glyph(
@@ -1449,7 +1442,7 @@ fn rasterize_glyph(
     ascender: f32,
     emoji: bool,
     is_fallback: bool,
-) -> (CacheRect, Vec<u32>, bool) {
+) -> (CacheRect, Vec<u32>) {
     let actual_width = metrics
         .glyph_hor_advance(GlyphId(info.glyph_id as _))
         .unwrap_or_default();
@@ -1554,7 +1547,13 @@ fn rasterize_glyph(
             &DrawOptions::new(),
         );
 
-        return (*cached, image, false);
+        return (
+            CacheRect {
+                color: false,
+                ..*cached
+            },
+            image,
+        );
     }
 
     let mut image = vec![0u32; cached.width as usize * 2 * cached.height as usize * 2];
@@ -1605,14 +1604,26 @@ fn rasterize_glyph(
             *argb = u32::from_le_bytes([r, g, b, a]);
         }
 
-        return (*cached, final_image, true);
+        return (
+            CacheRect {
+                color: true,
+                ..*cached
+            },
+            final_image,
+        );
     }
 
     if let Some(raster) = metrics.glyph_raster_image(GlyphId(info.glyph_id as _), u16::MAX) {
         if let Some((cache_rect, image)) =
             extract_color_image(&mut image, raster, cached, advance_scale)
         {
-            return (cache_rect, image, true);
+            return (
+                CacheRect {
+                    color: true,
+                    ..cache_rect
+                },
+                image,
+            );
         }
     }
 
@@ -1689,7 +1700,13 @@ fn rasterize_glyph(
             },
         );
 
-        return (*cached, final_image.into_vec(), false);
+        return (
+            CacheRect {
+                color: false,
+                ..*cached
+            },
+            final_image.into_vec(),
+        );
     }
 
     if let Some(raster) = metrics.glyph_raster_image(GlyphId(info.glyph_id as _), u16::MAX) {
@@ -1697,15 +1714,23 @@ fn rasterize_glyph(
             if let Some((cached, image)) =
                 extract_bw_image(&mut image, raster, cached, advance_scale)
             {
-                return (cached, image, false);
+                return (
+                    CacheRect {
+                        color: false,
+                        ..cached
+                    },
+                    image,
+                );
             }
         }
     }
 
     (
-        *cached,
+        CacheRect {
+            color: false,
+            ..*cached
+        },
         vec![0u32; cached.width as usize * cached.height as usize],
-        false,
     )
 }
 
@@ -2673,6 +2698,7 @@ mod tests {
             &mut image,
             raster,
             Entry::Cached(CacheRect {
+                color: false,
                 x: 0,
                 y: 0,
                 width: golden.width(),
@@ -2716,6 +2742,7 @@ mod tests {
             &mut image,
             raster,
             Entry::Cached(CacheRect {
+                color: false,
                 x: 0,
                 y: 0,
                 width: 1,
@@ -2751,6 +2778,7 @@ mod tests {
             &mut image,
             raster,
             Entry::Cached(CacheRect {
+                color: false,
                 x: 0,
                 y: 0,
                 width: 4,
@@ -2799,6 +2827,7 @@ mod tests {
             &mut image,
             raster,
             Entry::Cached(CacheRect {
+                color: false,
                 x: 0,
                 y: 0,
                 width: 8,
@@ -2857,6 +2886,7 @@ mod tests {
             &mut image,
             raster,
             Entry::Cached(CacheRect {
+                color: false,
                 x: 0,
                 y: 0,
                 width: 6,
@@ -2913,6 +2943,7 @@ mod tests {
             &mut image,
             raster,
             Entry::Cached(CacheRect {
+                color: false,
                 x: 0,
                 y: 0,
                 width: 6,
@@ -2981,6 +3012,7 @@ mod tests {
             &mut image,
             raster,
             Entry::Cached(CacheRect {
+                color: false,
                 x: 0,
                 y: 0,
                 width: 1,
@@ -3019,6 +3051,7 @@ mod tests {
             &mut image,
             raster,
             Entry::Cached(CacheRect {
+                color: false,
                 x: 0,
                 y: 0,
                 width: 2,

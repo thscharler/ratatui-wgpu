@@ -2,10 +2,11 @@ struct VertexOutput {
     @location(0) UV: vec2<f32>,
     @location(1) @interpolate(flat) UVx0: f32,
     @location(2) @interpolate(flat) FgColor: u32,
-    @location(3) @interpolate(flat) UnderlinePos: u32,
-    @location(4) @interpolate(flat) StrikeoutPos: u32,
-    @location(5) @interpolate(flat) CursorPos: u32,
-    @location(6) @interpolate(flat) CursorColor: u32,
+    @location(3) @interpolate(flat) ColorGlyph: u32,
+    @location(4) @interpolate(flat) UnderlinePos: u32,
+    @location(5) @interpolate(flat) StrikeoutPos: u32,
+    @location(6) @interpolate(flat) CursorPos: u32,
+    @location(7) @interpolate(flat) CursorColor: u32,
     @builtin(position) gl_Position: vec4<f32>,
 }
 
@@ -18,16 +19,18 @@ fn vs_main(
     @location(1) UV: vec2<f32>,
     @location(2) UVx0: f32,
     @location(3) FgColor: u32,
-    @location(4) UnderlinePos: u32,
-    @location(5) StrikeoutPos: u32,
-    @location(6) CursorPos: u32,
-    @location(7) CursorColor: u32,
+    @location(4) ColorGlyph: u32,
+    @location(5) UnderlinePos: u32,
+    @location(6) StrikeoutPos: u32,
+    @location(7) CursorPos: u32,
+    @location(8) CursorColor: u32,
 ) -> VertexOutput {
     let gl_Position = vec4<f32>((2.0 * VertexCoord / ScreenSize.xy - 1.0) * vec2(1.0, -1.0), 0.0, 1.0);
 
     return VertexOutput(UV,
         UVx0,
         FgColor,
+        ColorGlyph,
         UnderlinePos,
         StrikeoutPos,
         CursorPos,
@@ -41,12 +44,9 @@ struct FragmentOutput {
 
 @group(1) @binding(0) 
 var Atlas: texture_2d<f32>;
-@group(1) @binding(1) 
-var Mask: texture_2d<f32>;
-@group(1) @binding(2) 
+@group(1) @binding(1)
 var Sampler: sampler;
-
-@group(1) @binding(3) 
+@group(1) @binding(2)
 var<uniform> AtlasSize: vec4<f32>;
 
 @fragment
@@ -54,21 +54,21 @@ fn fs_main(
     @location(0) UV: vec2<f32>,
     @location(1) @interpolate(flat) UVx0: f32,
     @location(2) @interpolate(flat) FgColor: u32,
-    @location(3) @interpolate(flat) UnderlinePos: u32,
-    @location(4) @interpolate(flat) StrikeoutPos: u32,
-    @location(5) @interpolate(flat) CursorPos: u32,
-    @location(6) @interpolate(flat) CursorColor: u32,
+    @location(3) @interpolate(flat) ColorGlyph: u32,
+    @location(4) @interpolate(flat) UnderlinePos: u32,
+    @location(5) @interpolate(flat) StrikeoutPos: u32,
+    @location(6) @interpolate(flat) CursorPos: u32,
+    @location(7) @interpolate(flat) CursorColor: u32,
 ) -> FragmentOutput {
     var cursorColorUnpacked = unpack4x8unorm(CursorColor);
     var fgColorUnpacked = unpack4x8unorm(FgColor);
     var textureColor = textureSample(Atlas, Sampler, UV / AtlasSize.xy);
-    let mask = textureSample(Mask, Sampler, UV / AtlasSize.xy);
 
     var fgcolorAlpha = fgColorUnpacked;
     let alpha = textureColor.a * fgcolorAlpha.a;
     textureColor.a = alpha;
     fgcolorAlpha.a = alpha;
-    var fragmentColor = select(fgcolorAlpha, textureColor, mask.r == 1.0);
+    var fragmentColor = select(fgcolorAlpha, textureColor, ColorGlyph == 1);
 
     let yMax = UnderlinePos & 0xFFFFu;
     let yMin = UnderlinePos >> 16u;

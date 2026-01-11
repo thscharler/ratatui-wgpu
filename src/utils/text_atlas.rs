@@ -1,11 +1,8 @@
-use std::num::NonZeroUsize;
-use std::ops::Deref;
-
+use crate::fonts::FontBox;
 use evictor::Lru;
 use ratatui_core::style::Modifier;
-
-use crate::Fonts;
-use crate::fonts::FontBox;
+use std::num::NonZeroUsize;
+use std::ops::Deref;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct Key {
@@ -17,6 +14,7 @@ pub(crate) struct Key {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct CacheRect {
+    pub(crate) color: bool,
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) width: u32,
@@ -81,19 +79,14 @@ impl Atlas {
         }
     }
 
-    pub(crate) fn match_fonts(
+    pub(crate) fn update_font_box(
         &mut self,
-        fonts: &Fonts,
+        font_box: FontBox,
     ) {
         self.clear();
-        self.entry_width = fonts.min_width_px() * 2;
-        self.entry_height = fonts.height_px();
+        self.entry_width = font_box.width * 2;
+        self.entry_height = font_box.height;
         self.max_entries = (self.width / self.entry_width) * (self.height / self.entry_height);
-
-        // debug!(
-        //     "Atlas with WxH {}x{} can hold {}",
-        //     self.entry_width, self.entry_height, self.max_entries
-        // );
     }
 
     fn clear(&mut self) {
@@ -106,6 +99,15 @@ impl Atlas {
         key: &Key,
     ) -> Option<Entry> {
         self.lru.get(key).copied().map(Entry::Cached)
+    }
+
+    pub(crate) fn update_colored(
+        &mut self,
+        key: &Key,
+        colored: bool,
+    ) {
+        let c = self.lru.get_mut(key).expect("cached rect");
+        c.color = colored;
     }
 
     pub(crate) fn get(
@@ -146,6 +148,7 @@ impl Atlas {
         let x = slot % (self.width / self.entry_width) * self.entry_width;
         let y = slot / (self.width / self.entry_width) * self.entry_height;
         CacheRect {
+            color: false,
             x,
             y,
             width,

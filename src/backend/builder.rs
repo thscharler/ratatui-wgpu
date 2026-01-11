@@ -535,23 +535,6 @@ where
 
         let text_cache_view = text_cache.create_view(&TextureViewDescriptor::default());
 
-        let text_mask = device.create_texture(&TextureDescriptor {
-            label: Some("Text Mask"),
-            size: Extent3d {
-                width: CACHE_WIDTH,
-                height: CACHE_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::R8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        let text_mask_view = text_mask.create_view(&TextureViewDescriptor::default());
-
         let sampler = device.create_sampler(&SamplerDescriptor {
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
@@ -585,7 +568,6 @@ where
             &text_screen_size_buffer,
             &atlas_size_buffer,
             &text_cache_view,
-            &text_mask_view,
             &sampler,
         );
 
@@ -652,7 +634,6 @@ where
             wgpu_atlas: WgpuAtlas {
                 cached: Atlas::new(font_box, CACHE_WIDTH, CACHE_HEIGHT),
                 text_cache,
-                text_mask,
             },
             wgpu_post_process: Box::new(post_process),
             wgpu_pipeline: WgpuPipeline {
@@ -743,7 +724,6 @@ fn build_text_fg_compositor(
     screen_size: &Buffer,
     atlas_size: &Buffer,
     cache_view: &TextureView,
-    mask_view: &TextureView,
     sampler: &Sampler,
 ) -> TextCacheFgPipeline {
     let shader = device.create_shader_module(include_wgsl!("shaders/composite_fg.wgsl"));
@@ -778,21 +758,11 @@ fn build_text_fg_compositor(
             BindGroupLayoutEntry {
                 binding: 1,
                 visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: true },
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 2,
-                visibility: ShaderStages::FRAGMENT,
                 ty: BindingType::Sampler(SamplerBindingType::Filtering),
                 count: None,
             },
             BindGroupLayoutEntry {
-                binding: 3,
+                binding: 2,
                 visibility: ShaderStages::FRAGMENT,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
@@ -823,14 +793,10 @@ fn build_text_fg_compositor(
             },
             BindGroupEntry {
                 binding: 1,
-                resource: BindingResource::TextureView(mask_view),
-            },
-            BindGroupEntry {
-                binding: 2,
                 resource: BindingResource::Sampler(sampler),
             },
             BindGroupEntry {
-                binding: 3,
+                binding: 2,
                 resource: atlas_size.as_entire_binding(),
             },
         ],
@@ -852,7 +818,7 @@ fn build_text_fg_compositor(
             buffers: &[VertexBufferLayout {
                 array_stride: size_of::<TextVertexMember>() as u64,
                 step_mode: VertexStepMode::Vertex,
-                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Uint32, 4 => Uint32, 5 => Uint32, 6 => Uint32, 7 => Uint32, ],
+                attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Uint32, 4 => Uint32, 5 => Uint32, 6 => Uint32, 7 => Uint32, 8 => Uint32 ],
             }],
         },
         primitive: PrimitiveState {

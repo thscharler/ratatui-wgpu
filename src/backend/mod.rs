@@ -302,6 +302,7 @@ struct TextVertexMember {
     uv: [f32; 2],
     uv_x0: f32,
     fg_color: u32,
+    color_glyph: u32,
     underline_pos: u32,
     strikeout_pos: u32,
     cursor_pos: u32,
@@ -330,7 +331,6 @@ struct WgpuBase<'s> {
 struct WgpuAtlas {
     cached: Atlas,
     text_cache: Texture,
-    text_mask: Texture,
 }
 
 struct WgpuVertices {
