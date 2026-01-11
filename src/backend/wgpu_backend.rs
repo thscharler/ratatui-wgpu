@@ -87,6 +87,7 @@ pub(crate) struct TuiSurface {
     pub(super) cells: Vec<Cell>,
     pub(super) cell_remap: Vec<u16>,
     pub(super) dirty_rows: BitVec,
+    pub(super) dirty_cells: BitVec,
     pub(super) fast_blinking: BitVec,
     pub(super) slow_blinking: BitVec,
 
@@ -294,6 +295,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         new_colors: ColorTable,
     ) {
         self.tui_surface.dirty_rows.clear();
+        self.tui_surface.dirty_cells.clear();
         self.tui_surface.colors = new_colors;
     }
 
@@ -305,6 +307,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     ) {
         self.fonts = new_fonts;
         self.tui_surface.dirty_rows.clear();
+        self.tui_surface.dirty_cells.clear();
         self.wgpu_atlas.cached.match_fonts(&self.fonts);
 
         rebuild_surface(
@@ -328,6 +331,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.fonts.clear_fonts();
         self.fonts.add_fonts(new_fonts);
         self.tui_surface.dirty_rows.clear();
+        self.tui_surface.dirty_cells.clear();
         self.wgpu_atlas.cached.match_fonts(&self.fonts);
 
         rebuild_surface(
@@ -346,6 +350,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         new_font_size: u32,
     ) {
         self.tui_surface.dirty_rows.clear();
+        self.tui_surface.dirty_cells.clear();
         self.fonts.set_size_px(new_font_size);
         self.wgpu_atlas.cached.match_fonts(&self.fonts);
 
@@ -408,6 +413,7 @@ fn rebuild_surface(
     // resized. If we don't re-render the rows, we end up with a blank surface when
     // the resize is less than a character dimension.
     tui_surface.dirty_rows.clear();
+    tui_surface.dirty_cells.clear();
 
     rendered.clear();
 
@@ -548,6 +554,9 @@ fn draw_tui(
         .slow_blinking
         .resize(bounds.height as usize * bounds.width as usize, false);
     tui_surface.dirty_rows.resize(bounds.height as usize, true);
+    tui_surface
+        .dirty_cells
+        .resize(bounds.height as usize * bounds.width as usize, true);
 
     rendered.resize_with(
         bounds.height as usize * bounds.width as usize,
@@ -567,10 +576,13 @@ fn draw_tui(
 
         for i in 1..tui_surface.cells[index].symbol().width() {
             tui_surface.cells[index + i] = ONE_CELL;
+            tui_surface.dirty_cells.set(index + i, true);
         }
         tui_surface.cells[index] = cell.clone();
+        tui_surface.dirty_cells.set(index, true);
         for i in 1..tui_surface.cells[index].symbol().width() {
             tui_surface.cells[index + i] = NULL_CELL;
+            tui_surface.dirty_cells.set(index + i, true);
         }
 
         tui_surface.dirty_rows.set(y as usize, true);
@@ -626,7 +638,9 @@ fn flush_tui(
 
         // rebuild from scratch
         for cell_idx in 0..bounds.width as usize {
-            rendered[row_offset + cell_idx].clear();
+            if tui_surface.dirty_cells[row_offset + cell_idx] {
+                rendered[row_offset + cell_idx].clear();
+            }
         }
 
         // run text shaping
@@ -667,6 +681,7 @@ fn flush_tui(
                     *tmp_buffer = shape(
                         row_idx,
                         row_cells,
+                        &tui_surface.dirty_cells[row_offset..row_offset + bounds.width as usize],
                         &tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
                         &tmp_rowbuf,
                         &tmp_rowbuf_to_cell,
@@ -719,6 +734,7 @@ fn flush_tui(
         *tmp_buffer = shape(
             row_idx,
             row_cells,
+            &tui_surface.dirty_cells[row_offset..row_offset + bounds.width as usize],
             &tui_surface.cell_remap[row_offset..row_offset + bounds.width as usize],
             &tmp_rowbuf,
             tmp_rowbuf_to_cell,
@@ -817,6 +833,10 @@ fn append_dirty_rows(
 
         tui_surface
             .dirty_rows
+            .iter_mut()
+            .for_each(|mut v| *v = false);
+        tui_surface
+            .dirty_cells
             .iter_mut()
             .for_each(|mut v| *v = false);
 
@@ -1048,10 +1068,20 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let bounds = self.size()?;
         let pos = position.into();
 
+        // old cursor
+        self.tui_surface.dirty_cells.set(
+            self.tui_surface.cursor.1 as usize * bounds.width as usize + self.tui_surface.cursor.0 as usize,
+            true,
+        );
+
         self.tui_surface.cursor = (pos.x.min(bounds.width - 1), pos.y.min(bounds.height - 1));
         self.tui_surface
             .dirty_rows
             .set(self.tui_surface.cursor.1 as usize, true);
+        self.tui_surface.dirty_cells.set(
+            self.tui_surface.cursor.1 as usize * bounds.width as usize + self.tui_surface.cursor.0 as usize,
+            true,
+        );
 
         Ok(())
     }
@@ -1182,6 +1212,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 fn shape(
     row_idx: usize,
     row: &[Cell],
+    dirty_cells: &BitSlice,
     cell_remap: &[u16],
     buf_str: &str,
     buf_to_cell: &[u16],
@@ -1207,6 +1238,11 @@ fn shape(
         .zip(buffer.glyph_positions().iter())
     {
         let cell_idx = buf_to_cell[info.cluster as usize] as usize;
+
+        if !dirty_cells[cell_idx] {
+            continue;
+        }
+
         let cell = &row[cell_idx];
         let ch = buf_str[info.cluster as usize..]
             .chars()

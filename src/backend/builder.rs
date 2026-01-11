@@ -611,6 +611,7 @@ where
                 cells: vec![],
                 cell_remap: vec![],
                 dirty_rows: Default::default(),
+                dirty_cells: Default::default(),
                 fast_blinking: Default::default(),
                 slow_blinking: Default::default(),
                 cursor: (0, 0),
