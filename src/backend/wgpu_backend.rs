@@ -1086,6 +1086,9 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let pos = position.into();
 
         // old cursor
+        self.tui_surface
+            .dirty_rows
+            .set(self.tui_surface.cursor.1 as usize, true);
         self.tui_surface.dirty_cells.set(
             self.tui_surface.cursor.1 as usize * bounds.width as usize
                 + self.tui_surface.cursor.0 as usize,
