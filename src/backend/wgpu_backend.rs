@@ -653,7 +653,7 @@ fn flush_tui(
             }
         }
 
-        // rebuild from scratch
+        // rebuild rendered glyphs from scratch
         for cell_idx in 0..bounds.width as usize {
             if tui_surface.dirty_cells[row_offset + cell_idx] {
                 rendered[row_offset + cell_idx].clear();
@@ -821,7 +821,6 @@ fn flush_blink(
 }
 
 fn append_dirty_rows(
-    bounds: ratatui_core::layout::Size,
     tui_surface: &mut TuiSurface,
     wgpu_post_process: &dyn PostProcessor,
     rendered: &Vec<Rendered>,
@@ -834,14 +833,9 @@ fn append_dirty_rows(
         wgpu_vertices.text_indices.clear();
 
         let mut index_offset = 0;
-        for row in tui_surface.dirty_rows.iter_ones() {
-            let row_index = row * bounds.width as usize;
-            for col_index in 0..bounds.width as usize {
-                let index = row_index + col_index;
-
-                let to_render = &rendered[index];
-                append_rendered(&tui_surface, to_render, &mut index_offset, wgpu_vertices);
-            }
+        for cell_idx in tui_surface.dirty_cells.iter_ones() {
+            let to_render = &rendered[cell_idx];
+            append_rendered(&tui_surface, to_render, &mut index_offset, wgpu_vertices);
         }
 
         tui_surface
@@ -1164,7 +1158,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         );
 
         append_dirty_rows(
-            bounds,
             &mut self.tui_surface,
             self.wgpu_post_process.as_ref(),
             &self.rendered,
@@ -1251,6 +1244,7 @@ fn shape(
 
     let mut x = 0;
     let mut default_chars_wide = 1;
+    #[allow(unused_assignments)]
     let mut chars_wide = 1;
     let mut last_cell_idx: Option<usize> = None;
     let mut last_advance = 0;
