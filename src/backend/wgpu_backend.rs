@@ -4,8 +4,8 @@ use crate::backend::TextVertexMember;
 use crate::backend::{PostProcessor, WgpuAtlas, WgpuBase, WgpuPipeline, WgpuVertices};
 use crate::colors::ColorTable;
 use crate::colors::Rgb;
+use crate::fonts::Fonts;
 use crate::fonts::{Font, FontBox};
-use crate::fonts::{Fonts, RenderedFont};
 use crate::utils::plan_cache::PlanCache;
 use crate::utils::text_atlas::CacheRect;
 use crate::utils::text_atlas::Entry;
@@ -36,6 +36,7 @@ use rustybuzz::GlyphBuffer;
 use rustybuzz::UnicodeBuffer;
 use std::mem::size_of;
 use std::num::NonZeroU64;
+use std::time::SystemTime;
 use std::{iter, mem};
 use unicode_bidi::Level;
 use unicode_bidi::ParagraphBidiInfo;
@@ -85,6 +86,7 @@ type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 
 pub(crate) struct TuiSurface {
     pub(super) cells: Vec<Cell>,
+    pub(super) cell_font: Vec<u64>,
     pub(super) cell_remap: Vec<u16>,
     pub(super) dirty_rows: BitVec,
     pub(super) dirty_cells: BitVec,
@@ -412,6 +414,7 @@ fn rebuild_surface(
     let chars_high = height / font_box.height;
 
     tui_surface.cells.clear();
+    tui_surface.cell_font.clear();
     tui_surface.cell_remap.clear();
     tui_surface.fast_blinking.clear();
     tui_surface.slow_blinking.clear();
@@ -543,6 +546,7 @@ fn render(
 
 fn draw_tui(
     bounds: ratatui_core::layout::Size,
+    fonts: &Fonts,
     content: &mut dyn Iterator<Item = (u16, u16, &'_ Cell)>,
     tui_surface: &mut TuiSurface,
     rendered: &mut Vec<Rendered>,
@@ -550,6 +554,9 @@ fn draw_tui(
     tui_surface
         .cells
         .resize(bounds.height as usize * bounds.width as usize, Cell::EMPTY);
+    tui_surface
+        .cell_font
+        .resize(bounds.height as usize * bounds.width as usize, 0);
     tui_surface
         .cell_remap
         .resize(bounds.height as usize * bounds.width as usize, 0);
@@ -580,15 +587,20 @@ fn draw_tui(
             .slow_blinking
             .set(index, cell.modifier.contains(Modifier::SLOW_BLINK));
 
-        for i in 1..tui_surface.cells[index].symbol().width() {
-            tui_surface.cells[index + i] = ONE_CELL;
-            tui_surface.dirty_cells.set(index + i, true);
+        let old_symbol_width = tui_surface.cells[index].symbol().width();
+        if index + 1 < index + old_symbol_width {
+            tui_surface.cells[index + 1..index + old_symbol_width].fill(ONE_CELL);
+            tui_surface.dirty_cells[index + 1..index + old_symbol_width].fill(true);
         }
+
         tui_surface.cells[index] = cell.clone();
+        tui_surface.cell_font[index] = fonts.font_for_cell(cell);
         tui_surface.dirty_cells.set(index, true);
-        for i in 1..tui_surface.cells[index].symbol().width() {
-            tui_surface.cells[index + i] = NULL_CELL;
-            tui_surface.dirty_cells.set(index + i, true);
+
+        let new_symbol_width = tui_surface.cells[index].symbol().width();
+        if index + 1 < index + new_symbol_width {
+            tui_surface.cells[index + 1..index + new_symbol_width].fill(NULL_CELL);
+            tui_surface.dirty_cells[index + 1..index + new_symbol_width].fill(true);
         }
 
         tui_surface.dirty_rows.set(y as usize, true);
@@ -618,6 +630,8 @@ fn flush_tui(
             continue;
         }
 
+        let tt = SystemTime::now();
+
         let row_offset = row_idx.min(bounds.height as usize - 1) * bounds.width as usize;
 
         // This block concatenates the strings for the row into one string for bidi
@@ -627,7 +641,6 @@ fn flush_tui(
         tmp_rowbuf.clear();
         tmp_rowbuf_to_cell.clear();
 
-        let mut fontmap = Vec::with_capacity(tmp_rowbuf_to_cell.capacity());
         for (cell_idx, cell) in row_cells.iter().enumerate() {
             if !cell.skip {
                 tmp_rowbuf.push_str(cell.symbol());
@@ -638,8 +651,6 @@ fn flush_tui(
             }
 
             tui_surface.cell_remap[row_offset + cell_idx] = cell_idx as u16;
-
-            fontmap.push(fonts.font_for_cell(cell));
         }
 
         // run text shaping
@@ -660,14 +671,8 @@ fn flush_tui(
             }
         }
 
-        let (
-            mut current_font,
-            mut current_fake_bold,
-            mut current_fake_italic,
-            mut current_is_fallback,
-        ) = fontmap[0];
+        let mut current_font_id = tui_surface.cell_font[row_offset];
         let mut current_level = Level::ltr();
-
         for (level, range) in runs.into_iter().map(|run| (levels[run.start], run)) {
             let bidi_run_chars = &tmp_rowbuf[range.clone()];
             let bidi_run_cells = &tmp_rowbuf_to_cell[range.clone()];
@@ -682,14 +687,10 @@ fn flush_tui(
                     continue;
                 }
 
-                let (font, fake_bold, fake_italic, is_fallback) = fontmap[cell_idx];
-                if font.id() != current_font.id()
-                    || current_fake_bold != fake_bold
-                    || current_fake_italic != fake_italic
-                    || current_is_fallback != is_fallback
-                    || current_level != level
-                {
+                let font_id = tui_surface.cell_font[row_offset + cell_idx];
+                if font_id != current_font_id || current_level != level {
                     let mut buffer = mem::take(tmp_buffer);
+                    let current_font = fonts.get_by_id(current_font_id);
 
                     *tmp_buffer = shape(
                         row_idx,
@@ -700,16 +701,12 @@ fn flush_tui(
                         &tmp_rowbuf_to_cell,
                         shape_with_plan(
                             current_font.font(),
-                            tmp_plan_cache.get(current_font, &mut buffer),
+                            tmp_plan_cache.get(current_font_id, current_font, &mut buffer),
                             buffer,
                         ),
-                        RenderedFont {
-                            font_box: fonts.font_box(),
-                            font: current_font,
-                            fake_bold: current_fake_bold,
-                            fake_italic: current_fake_italic,
-                            is_fallback: current_is_fallback,
-                        },
+                        current_font_id,
+                        fonts.font_box(),
+                        current_font,
                         tui_surface.cursor_visible,
                         tui_surface.cursor,
                         &mut rendered[row_offset..row_offset + bounds.width as usize],
@@ -735,15 +732,13 @@ fn flush_tui(
 
                 tmp_buffer.add(ch, (range.start + ch_idx) as u32);
 
-                current_font = font;
-                current_fake_bold = fake_bold;
-                current_fake_italic = fake_italic;
-                current_is_fallback = is_fallback;
+                current_font_id = font_id;
                 current_level = level;
             }
         }
 
         let mut buffer = mem::take(tmp_buffer);
+        let current_font = fonts.get_by_id(current_font_id);
         *tmp_buffer = shape(
             row_idx,
             row_cells,
@@ -753,22 +748,20 @@ fn flush_tui(
             tmp_rowbuf_to_cell,
             shape_with_plan(
                 current_font.font(),
-                tmp_plan_cache.get(current_font, &mut buffer),
+                tmp_plan_cache.get(current_font_id, current_font, &mut buffer),
                 buffer,
             ),
-            RenderedFont {
-                font_box: fonts.font_box(),
-                font: current_font,
-                fake_bold: current_fake_bold,
-                fake_italic: current_fake_italic,
-                is_fallback: current_is_fallback,
-            },
+            current_font_id,
+            fonts.font_box(),
+            current_font,
             tui_surface.cursor_visible,
             tui_surface.cursor,
             &mut rendered[row_offset..row_offset + bounds.width as usize],
             wgpu_atlas,
             queue,
         );
+
+        debug!("{} render row {:?}", row_idx, tt.elapsed());
     }
 }
 
@@ -1048,6 +1041,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         let bounds = self.size()?;
         draw_tui(
             bounds,
+            &self.fonts,
             &mut content,
             &mut self.tui_surface,
             &mut self.rendered,
@@ -1104,6 +1098,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
 
     fn clear(&mut self) -> std::io::Result<()> {
         self.tui_surface.cells.clear();
+        self.tui_surface.cell_font.clear();
         self.tui_surface.dirty_rows.clear();
         self.rendered.clear();
         self.tui_surface.fast_blinking.clear();
@@ -1190,20 +1185,53 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             ClearType::All => self.clear(),
             ClearType::AfterCursor => {
                 self.tui_surface.cells.truncate(idx + 1);
+                self.tui_surface.cell_font.truncate(idx + 1);
+                self.tui_surface.cell_remap.truncate(idx + 1);
+                self.tui_surface
+                    .dirty_rows
+                    .truncate(self.tui_surface.cursor.1 as usize);
+                self.tui_surface.dirty_cells.truncate(idx + 1);
+                self.tui_surface.fast_blinking.truncate(idx + 1);
+                self.tui_surface.slow_blinking.truncate(idx + 1);
                 Ok(())
             }
             ClearType::BeforeCursor => {
                 self.tui_surface.cells[..idx].fill(Cell::EMPTY);
+                self.tui_surface.cell_font[..idx].fill(0);
+                self.tui_surface.cell_remap[..idx].fill(0);
+                self.tui_surface.dirty_rows[..=self.tui_surface.cursor.1 as usize].fill(true);
+                self.tui_surface.dirty_cells[..idx].fill(true);
+                self.tui_surface.fast_blinking[..idx].fill(false);
+                self.tui_surface.slow_blinking[..idx].fill(false);
                 Ok(())
             }
             ClearType::CurrentLine => {
                 self.tui_surface.cells[line_start..line_start + bounds.width as usize]
                     .fill(Cell::EMPTY);
+                self.tui_surface.cell_font[line_start..line_start + bounds.width as usize].fill(0);
+                self.tui_surface.cell_remap[line_start..line_start + bounds.width as usize].fill(0);
+                self.tui_surface
+                    .dirty_rows
+                    .set(self.tui_surface.cursor.1 as usize, true);
+                self.tui_surface.dirty_cells[line_start..line_start + bounds.width as usize]
+                    .fill(true);
+                self.tui_surface.fast_blinking[line_start..line_start + bounds.width as usize]
+                    .fill(false);
+                self.tui_surface.slow_blinking[line_start..line_start + bounds.width as usize]
+                    .fill(false);
                 Ok(())
             }
             ClearType::UntilNewLine => {
                 let remain = (bounds.width - self.tui_surface.cursor.0) as usize;
                 self.tui_surface.cells[idx..idx + remain].fill(Cell::EMPTY);
+                self.tui_surface.cell_font[idx..idx + remain].fill(0);
+                self.tui_surface.cell_remap[idx..idx + remain].fill(0);
+                self.tui_surface
+                    .dirty_rows
+                    .set(self.tui_surface.cursor.1 as usize, true);
+                self.tui_surface.dirty_cells[idx..idx + remain].fill(true);
+                self.tui_surface.fast_blinking[idx..idx + remain].fill(false);
+                self.tui_surface.slow_blinking[idx..idx + remain].fill(false);
                 Ok(())
             }
         }
@@ -1232,7 +1260,9 @@ fn shape(
     buf_str: &str,
     buf_to_cell: &[u16],
     buffer: GlyphBuffer,
-    font: RenderedFont<'_>,
+    font_id: u64,
+    font_box: FontBox,
+    font: &Font<'_>,
     cursor_visible: bool,
     cursor: (u16, u16),
     rendered: &mut [Rendered],
@@ -1240,7 +1270,7 @@ fn shape(
     queue: &Queue,
 ) -> UnicodeBuffer {
     let metrics = font.font();
-    let advance_scale = font.font_box.scale;
+    let advance_scale = font_box.scale;
 
     let mut x = 0;
     let mut default_chars_wide = 1;
@@ -1270,16 +1300,15 @@ fn shape(
         // every glyph in the cell is positioned.
         let mut first_glyph = false;
         if last_cell_idx != Some(cell_idx) {
-            x = cell_remap[cell_idx] as i32 * font.font_box.width as i32;
+            x = cell_remap[cell_idx] as i32 * font_box.width as i32;
             default_chars_wide = ch.width().unwrap_or(1).max(1);
+            assert_ne!(default_chars_wide, 0);
             chars_wide = default_chars_wide;
             last_advance = 0;
             first_glyph = true;
         } else {
-            chars_wide = ch
-                .width()
-                .unwrap_or(default_chars_wide)
-                .max(default_chars_wide);
+            chars_wide = ch.width().unwrap_or(default_chars_wide).max(1);
+            assert_ne!(chars_wide, 0);
         }
 
         // if we have a combining '.undef'. skip it completely.
@@ -1294,7 +1323,7 @@ fn shape(
         let glyph_advance = (position.x_advance as f32 * advance_scale) as i32;
         let glyph_offset = (position.x_offset as f32 * advance_scale) as i32;
 
-        let basey = row_idx as i32 * font.font_box.height as i32
+        let basey = row_idx as i32 * font_box.height as i32
             + (position.y_offset as f32 * advance_scale) as i32;
 
         let mut basex = x + glyph_offset;
@@ -1309,42 +1338,34 @@ fn shape(
         // advance
         x += glyph_advance;
 
-        // This assumes that we only want to underline the first character in the
-        // cluster, and that the remaining characters are all combining characters
-        // which don't need an underline.
-        let limit_modifiers = if first_glyph {
-            Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED | Modifier::CROSSED_OUT
-        } else {
-            Modifier::BOLD | Modifier::ITALIC
-        };
-
         let key = Key {
-            style: cell.modifier.intersection(limit_modifiers),
+            style: cell
+                .modifier
+                .intersection(Modifier::BOLD | Modifier::ITALIC),
             glyph: info.glyph_id,
             width: chars_wide as u8,
-            font: font.font.id(),
+            font: font_id,
         };
 
-        let cached = wgpu_atlas.cached.get(
-            &key,
-            chars_wide as u32 * font.font_box.width,
-            font.font_box.height,
-        );
+        let cached =
+            wgpu_atlas
+                .cached
+                .get(&key, chars_wide as u32 * font_box.width, font_box.height);
 
         let cursor_pos =
             if first_glyph && cursor_visible && (cell_idx as u16, row_idx as u16) == cursor {
-                font.underline(font.font_box.height, cached.height)
+                font.underline_metrics(font_box.height, cached.height)
             } else {
                 (0, 0)
             };
 
-        let underline_pos = if key.style.contains(Modifier::UNDERLINED) {
-            font.underline(font.font_box.height, cached.height)
+        let underline_pos = if cell.modifier.contains(Modifier::UNDERLINED) {
+            font.underline_metrics(font_box.height, cached.height)
         } else {
             (0, 0)
         };
-        let strikeout_pos = if key.style.contains(Modifier::CROSSED_OUT) {
-            font.strikeout(font.font_box.height, cached.height)
+        let strikeout_pos = if cell.modifier.contains(Modifier::CROSSED_OUT) {
+            font.strikeout_metrics(font_box.height, cached.height)
         } else {
             (0, 0)
         };
@@ -1369,17 +1390,19 @@ fn shape(
             continue;
         }
 
-        let is_emoji = ch.is_emoji_char();
+        let is_emoji =
+            ch.is_emoji_char() && ch.general_category_group() != GeneralCategoryGroup::Number;
         let (cached, image) = rasterize_glyph(
             cached,
             metrics,
             info,
-            font.fake_italic & !is_emoji,
-            font.fake_bold,
+            cell.modifier.contains(Modifier::BOLD),
+            cell.modifier.contains(Modifier::ITALIC),
             advance_scale,
-            font.font_box.ascender,
+            font_box.ascender,
             is_emoji,
-            font.is_fallback,
+            ch.general_category(),
+            font.is_fallback(),
         );
 
         // remember colored flag for the glyph.
@@ -1433,11 +1456,12 @@ fn rasterize_glyph(
     cached: Entry,
     metrics: &rustybuzz::Face,
     info: &rustybuzz::GlyphInfo,
-    fake_italic: bool,
-    fake_bold: bool,
+    bold: bool,
+    italic: bool,
     advance_scale: f32,
     ascender: f32,
     emoji: bool,
+    category: GeneralCategory,
     is_fallback: bool,
 ) -> (CacheRect, Vec<u32>) {
     let actual_width = metrics
@@ -1499,7 +1523,7 @@ fn rasterize_glyph(
         scale_y = scale;
     }
 
-    let skew = if fake_italic {
+    let skew = if !emoji && !metrics.is_italic() && italic {
         Transform::new(
             /* scale x */ 1.0,
             /* skew x */ 0.0,
@@ -1656,7 +1680,7 @@ fn rasterize_glyph(
             &DrawOptions::default(),
         );
 
-        if fake_bold {
+        if !metrics.is_bold() && bold {
             target.stroke(
                 &path,
                 &raqote::Source::Solid(SolidSource::from_unpremultiplied_argb(255, 255, 255, 255)),
@@ -1666,7 +1690,18 @@ fn rasterize_glyph(
                 },
                 &DrawOptions::new(),
             );
-        } else if emoji && is_fallback {
+        } else if emoji {
+            // noto-emoji and open-moji need this.
+            target.stroke(
+                &path,
+                &raqote::Source::Solid(SolidSource::from_unpremultiplied_argb(255, 255, 255, 255)),
+                &StrokeStyle {
+                    width: 1.0 / scale,
+                    ..Default::default()
+                },
+                &DrawOptions::new(),
+            );
+        } else if is_fallback && category == GeneralCategory::OtherSymbol {
             // noto-emoji and open-moji need this.
             target.stroke(
                 &path,

@@ -1,18 +1,17 @@
 use ratatui_core::buffer::Cell;
 use ratatui_core::style::Modifier;
 use rustybuzz::Face;
-use std::hash::BuildHasher;
-use std::hash::Hasher;
-use std::hash::RandomState;
 
 /// A Font which can be used for rendering.
 #[derive(Clone)]
 pub struct Font<'a> {
     font: Face<'a>,
+    fallback: bool,
     advance: f32,
     id: u64,
 }
 
+/// The metrics needed for rendering.
 #[derive(Debug, Clone, Copy)]
 pub struct FontBox {
     pub width: u32,
@@ -21,21 +20,10 @@ pub struct FontBox {
     pub scale: f32,
 }
 
-pub(crate) struct RenderedFont<'a> {
-    pub font_box: FontBox,
-    pub font: &'a Font<'a>,
-    pub fake_bold: bool,
-    pub fake_italic: bool,
-    pub is_fallback: bool,
-}
-
 impl<'a> Font<'a> {
     /// Create a new Font from data. Returns [`None`] if the font cannot
     /// be parsed.
     pub fn new(data: &'a [u8]) -> Option<Self> {
-        let mut hasher = RandomState::new().build_hasher();
-        hasher.write(data);
-
         Face::from_slice(data, 0).map(|font| {
             let em_idx;
             let advance;
@@ -49,8 +37,9 @@ impl<'a> Font<'a> {
 
             Self {
                 font,
+                fallback: false,
                 advance,
-                id: hasher.finish(),
+                id: 0,
             }
         })
     }
@@ -63,6 +52,10 @@ impl Font<'_> {
 
     pub(crate) fn font(&'_ self) -> &'_ Face<'_> {
         &self.font
+    }
+
+    pub(crate) fn is_fallback(&self) -> bool {
+        self.fallback
     }
 
     pub(crate) fn ascender(&self) -> f32 {
@@ -86,24 +79,17 @@ impl Font<'_> {
     ) -> u32 {
         (self.advance * self.scale(height_px)) as u32
     }
-}
 
-impl<'a> RenderedFont<'a> {
-    pub(crate) fn font(&self) -> &'_ Face<'_> {
-        &self.font.font
-    }
-
-    pub(crate) fn underline(
+    pub fn underline_metrics(
         &self,
         height_px: u32,
         box_height_px: u32,
     ) -> (u32, u32) {
-        let scale = self.font.scale(height_px);
+        let scale = self.scale(height_px);
 
         let ascender = self.font.ascender() as f32;
 
         let underline_position = self
-            .font
             .font
             .underline_metrics()
             .map(|m| m.position as f32)
@@ -111,7 +97,6 @@ impl<'a> RenderedFont<'a> {
         let underline_position = ascender - underline_position;
 
         let underline_thickness = self
-            .font
             .font
             .underline_metrics()
             .map(|m| m.thickness as f32)
@@ -133,17 +118,16 @@ impl<'a> RenderedFont<'a> {
         }
     }
 
-    pub(crate) fn strikeout(
+    pub fn strikeout_metrics(
         &self,
         height_px: u32,
         _box_height: u32,
     ) -> (u32, u32) {
-        let scale = self.font.scale(height_px);
+        let scale = self.scale(height_px);
 
         let ascender = self.font.ascender() as f32;
 
         let strikeout_position = self
-            .font
             .font
             .strikeout_metrics()
             .map(|m| m.position as f32)
@@ -155,7 +139,6 @@ impl<'a> RenderedFont<'a> {
         };
 
         let strikeout_thickness = self
-            .font
             .font
             .strikeout_metrics()
             .map(|m| m.thickness as f32)
@@ -189,6 +172,8 @@ pub struct Fonts<'a> {
     bold: Vec<Font<'a>>,
     italic: Vec<Font<'a>>,
     bold_italic: Vec<Font<'a>>,
+    // give an id in insertion order.
+    id_count: u64,
 }
 
 impl<'a> Fonts<'a> {
@@ -200,9 +185,12 @@ impl<'a> Fonts<'a> {
     /// The provided size_px will be the rendered height in pixels of all fonts
     /// in this collection.
     pub fn new(
-        font: Font<'a>,
+        mut font: Font<'a>,
         size_px: u32,
     ) -> Self {
+        font.fallback = true;
+        font.id = 0;
+
         Self {
             char_width_px: font.char_width(size_px),
             char_height_px: size_px,
@@ -215,6 +203,7 @@ impl<'a> Fonts<'a> {
             bold: vec![],
             italic: vec![],
             bold_italic: vec![],
+            id_count: 1,
         }
     }
 
@@ -229,9 +218,15 @@ impl<'a> Fonts<'a> {
     /// The provided size_px will be the rendered height in pixels of all fonts
     /// in this collection.
     pub fn new_vec(
-        fonts: Vec<Font<'a>>,
+        mut fonts: Vec<Font<'a>>,
         size_px: u32,
     ) -> Self {
+        fonts.iter_mut().enumerate().for_each(|(n, f)| {
+            f.fallback = true;
+            f.id = n as u64
+        });
+        let id_count = fonts.len() as u64;
+
         Self {
             char_width_px: size_px / 2,
             char_height_px: size_px,
@@ -244,6 +239,7 @@ impl<'a> Fonts<'a> {
             bold: vec![],
             italic: vec![],
             bold_italic: vec![],
+            id_count,
         }
     }
 
@@ -326,12 +322,10 @@ impl<'a> Fonts<'a> {
         &mut self,
         fonts: impl IntoIterator<Item = Font<'a>>,
     ) {
-        let bold_italic_len = self.bold_italic.len();
-        let italic_len = self.italic.len();
-        let bold_len = self.bold.len();
-        let regular_len = self.regular.len();
+        for mut font in fonts {
+            font.id = self.id_count;
+            self.id_count += 1;
 
-        for font in fonts {
             if !font.font().is_monospaced() {
                 warn!("Non monospace font used in add_fonts, this may cause unexpected rendering.");
             }
@@ -345,12 +339,6 @@ impl<'a> Fonts<'a> {
                 self.regular.push(font);
             }
         }
-
-        self.bold_italic[bold_italic_len..]
-            .sort_by_key(|font| font.char_width(self.char_height_px));
-        self.italic[italic_len..].sort_by_key(|font| font.char_width(self.char_height_px));
-        self.bold[bold_len..].sort_by_key(|font| font.char_width(self.char_height_px));
-        self.regular[regular_len..].sort_by_key(|font| font.char_width(self.char_height_px));
 
         self.has_fonts = !self.bold_italic.is_empty()
             || !self.italic.is_empty()
@@ -366,7 +354,11 @@ impl<'a> Fonts<'a> {
         &mut self,
         fonts: impl IntoIterator<Item = Font<'a>>,
     ) {
-        self.regular.extend(fonts.into_iter());
+        for mut font in fonts {
+            font.id = self.id_count;
+            self.id_count += 1;
+            self.regular.push(font);
+        }
         self.set_size_px(self.char_height_px);
         self.has_fonts = self.has_fonts || !self.regular.is_empty();
     }
@@ -381,7 +373,11 @@ impl<'a> Fonts<'a> {
         &mut self,
         fonts: impl IntoIterator<Item = Font<'a>>,
     ) {
-        self.bold.extend(fonts.into_iter());
+        for mut font in fonts {
+            font.id = self.id_count;
+            self.id_count += 1;
+            self.bold.push(font);
+        }
         self.set_size_px(self.char_height_px);
         self.has_fonts = self.has_fonts || !self.bold.is_empty();
     }
@@ -397,7 +393,11 @@ impl<'a> Fonts<'a> {
         &mut self,
         fonts: impl IntoIterator<Item = Font<'a>>,
     ) {
-        self.italic.extend(fonts.into_iter());
+        for mut font in fonts {
+            font.id = self.id_count;
+            self.id_count += 1;
+            self.italic.push(font);
+        }
         self.set_size_px(self.char_height_px);
         self.has_fonts = self.has_fonts || !self.italic.is_empty();
     }
@@ -412,7 +412,11 @@ impl<'a> Fonts<'a> {
         &mut self,
         fonts: impl IntoIterator<Item = Font<'a>>,
     ) {
-        self.bold_italic.extend(fonts.into_iter());
+        for mut font in fonts {
+            font.id = self.id_count;
+            self.id_count += 1;
+            self.bold_italic.push(font);
+        }
         self.set_size_px(self.char_height_px);
         self.has_fonts = self.has_fonts || !self.bold_italic.is_empty();
     }
@@ -420,7 +424,7 @@ impl<'a> Fonts<'a> {
 
 impl<'a> Fonts<'a> {
     /// Size of a cell with the current font in px.
-    pub(crate) fn font_box(&self) -> FontBox {
+    pub fn font_box(&self) -> FontBox {
         FontBox {
             width: self.min_width_px(),
             height: self.height_px(),
@@ -430,7 +434,7 @@ impl<'a> Fonts<'a> {
     }
 
     /// The minimum width (in pixels) across all fonts.
-    pub(crate) fn min_width_px(&self) -> u32 {
+    pub fn min_width_px(&self) -> u32 {
         self.char_width_px
     }
 
@@ -438,46 +442,60 @@ impl<'a> Fonts<'a> {
         1 + self.bold.len() + self.italic.len() + self.bold_italic.len() + self.regular.len()
     }
 
+    pub(crate) fn get_by_id(
+        &'a self,
+        id: u64,
+    ) -> &'a Font<'a> {
+        self.regular
+            .iter()
+            .chain(self.bold.iter())
+            .chain(self.italic.iter())
+            .chain(self.bold_italic.iter())
+            .chain(self.last_resort.iter())
+            .find(|v| v.id == id)
+            .expect("font")
+    }
+
     pub(crate) fn font_for_cell(
         &'_ self,
         cell: &Cell,
-    ) -> (&'_ Font<'_>, bool, bool, bool) {
+    ) -> u64 {
         if cell.modifier.contains(Modifier::BOLD | Modifier::ITALIC) {
             self.select_font(
                 cell.symbol(),
                 self.bold_italic
                     .iter()
-                    .map(|f| (f, false, false, false))
-                    .chain(self.italic.iter().map(|f| (f, true, false, false)))
-                    .chain(self.bold.iter().map(|f| (f, false, true, false)))
-                    .chain(self.regular.iter().map(|f| (f, true, true, false)))
-                    .chain(self.last_resort.iter().map(|v| (v, true, true, true))),
+                    .map(|f| f)
+                    .chain(self.italic.iter().map(|f| f))
+                    .chain(self.bold.iter().map(|f| f))
+                    .chain(self.regular.iter().map(|f| f))
+                    .chain(self.last_resort.iter().map(|f| f)),
             )
         } else if cell.modifier.contains(Modifier::BOLD) {
             self.select_font(
                 cell.symbol(),
                 self.bold
                     .iter()
-                    .map(|f| (f, false, false, false))
-                    .chain(self.regular.iter().map(|f| (f, true, false, false)))
-                    .chain(self.last_resort.iter().map(|v| (v, true, false, true))),
+                    .map(|f| f)
+                    .chain(self.regular.iter().map(|f| f))
+                    .chain(self.last_resort.iter().map(|f| f)),
             )
         } else if cell.modifier.contains(Modifier::ITALIC) {
             self.select_font(
                 cell.symbol(),
                 self.italic
                     .iter()
-                    .map(|f| (f, false, false, false))
-                    .chain(self.regular.iter().map(|f| (f, false, true, false)))
-                    .chain(self.last_resort.iter().map(|v| (v, false, true, true))),
+                    .map(|f| f)
+                    .chain(self.regular.iter().map(|f| f))
+                    .chain(self.last_resort.iter().map(|f| f)),
             )
         } else {
             self.select_font(
                 cell.symbol(),
                 self.regular
                     .iter()
-                    .map(|f| (f, false, false, false))
-                    .chain(self.last_resort.iter().map(|v| (v, false, false, true))),
+                    .map(|f| f)
+                    .chain(self.last_resort.iter().map(|f| f)),
             )
         }
     }
@@ -485,13 +503,13 @@ impl<'a> Fonts<'a> {
     fn select_font<'fonts>(
         &'fonts self,
         cluster: &str,
-        fonts: impl IntoIterator<Item = (&'fonts Font<'a>, bool, bool, bool)>,
-    ) -> (&'fonts Font<'a>, bool, bool, bool) {
+        fonts: impl IntoIterator<Item = &'fonts Font<'a>>,
+    ) -> u64 {
         let mut max = 0;
         let mut font = None;
         let mut last_resort = None;
 
-        for (candidate, fake_bold, fake_italic, is_fallback) in fonts.into_iter() {
+        for candidate in fonts.into_iter() {
             // try to map the complete cluster to a single font.
             // the first font that can map it completely wins, otherwise
             // the one with the max matched glyphs.
@@ -506,14 +524,14 @@ impl<'a> Fonts<'a> {
 
             if count > max {
                 max = count;
-                font = Some((candidate, fake_bold, fake_italic, is_fallback));
+                font = Some(candidate.id);
             }
 
             if count == last_idx + 1 {
                 break;
             }
 
-            last_resort = Some((candidate, fake_bold, fake_italic, is_fallback));
+            last_resort = Some(candidate.id);
         }
 
         font.unwrap_or_else(|| {

@@ -591,6 +591,7 @@ where
             fonts: self.fonts,
             tui_surface: TuiSurface {
                 cells: vec![],
+                cell_font: vec![],
                 cell_remap: vec![],
                 dirty_rows: Default::default(),
                 dirty_cells: Default::default(),
