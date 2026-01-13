@@ -296,6 +296,9 @@ impl<'a> Fonts<'a> {
             self.ascender = self.char_height_px as f32;
             self.em_advance = self.char_height_px as f32 / 2.0;
         }
+
+        assert!(self.char_height_px != 0);
+        assert!(self.char_width_px != 0);
     }
 
     /// Remove the non-fallback fonts.
