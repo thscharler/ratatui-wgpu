@@ -6,13 +6,13 @@ use fontdb::Database;
 use ratatui_core::style::Stylize;
 use ratatui_core::terminal::Terminal;
 use ratatui_core::text::Line;
-use ratatui_widgets::block::Block;
-use ratatui_widgets::paragraph::Paragraph;
 use ratatui_wgpu::shaders::AspectPreservingPostProcessorBuilder;
 use ratatui_wgpu::Builder;
 use ratatui_wgpu::Dimensions;
 use ratatui_wgpu::Font;
 use ratatui_wgpu::WgpuBackend;
+use ratatui_widgets::block::Block;
+use ratatui_widgets::paragraph::Paragraph;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
@@ -92,7 +92,7 @@ impl ApplicationHandler for App<'_> {
                         .unwrap(),
                     )
                     .with_fonts(self.fonts.clone())
-                    .with_width_and_height(Dimensions {
+                    .with_dimensions(Dimensions {
                         width: NonZeroU32::new(size.width).unwrap(),
                         height: NonZeroU32::new(size.height).unwrap(),
                     })

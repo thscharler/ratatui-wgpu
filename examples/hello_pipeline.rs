@@ -78,7 +78,7 @@ impl ApplicationHandler for App {
                         )))
                         .unwrap(),
                     )
-                    .with_width_and_height(Dimensions {
+                    .with_dimensions(Dimensions {
                         width: NonZeroU32::new(size.width).unwrap(),
                         height: NonZeroU32::new(size.height).unwrap(),
                     })

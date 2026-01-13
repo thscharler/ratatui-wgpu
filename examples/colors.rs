@@ -10,17 +10,17 @@ use ratatui_core::backend::Backend;
 use ratatui_core::layout::Size;
 use ratatui_core::style::Color;
 use ratatui_core::terminal::Terminal;
-use ratatui_widgets::block::Block;
+use ratatui_wgpu::shaders::CrtPostProcessorBuilder;
 use ratatui_wgpu::Builder;
 use ratatui_wgpu::Dimensions;
 use ratatui_wgpu::Font;
 use ratatui_wgpu::WgpuBackend;
+use ratatui_widgets::block::Block;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::window::Window;
 use winit::window::WindowAttributes;
-use ratatui_wgpu::shaders::CrtPostProcessorBuilder;
 
 pub struct App {
     window: Option<Arc<Window>>,
@@ -72,7 +72,7 @@ impl ApplicationHandler for App {
                         )))
                         .unwrap(),
                     )
-                    .with_width_and_height(Dimensions {
+                    .with_dimensions(Dimensions {
                         width: NonZeroU32::new(size.width).unwrap(),
                         height: NonZeroU32::new(size.height).unwrap(),
                     })

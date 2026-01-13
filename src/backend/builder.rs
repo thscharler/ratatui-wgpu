@@ -85,8 +85,8 @@ pub struct Builder<'a, P> {
     instance: Option<Instance>,
     limits: Option<Limits>,
     present_mode: Option<PresentMode>,
-    width: NonZeroU32,
-    height: NonZeroU32,
+    width: u32,
+    height: u32,
     colors: ColorTable,
     reset_fg: Color,
     reset_bg: Color,
@@ -109,11 +109,11 @@ where
         Self {
             postprocessor: Default::default(),
             instance: None,
-            fonts: Fonts::new(font, 24),
+            fonts: Fonts::new(font, 22),
             limits: None,
             present_mode: None,
-            width: NonZeroU32::new(1).unwrap(),
-            height: NonZeroU32::new(1).unwrap(),
+            width: 100,
+            height: 100,
             colors: named::DEFAULT_COLORS,
             reset_fg: Color::Black,
             reset_bg: Color::White,
@@ -125,17 +125,16 @@ where
         }
     }
 
-    /// Create a new Builder from a specified [`Font`] and default
-    /// [`PostProcessor::UserData`].
-    pub fn from_fonts(font: Vec<Font<'a>>) -> Self {
+    /// Create a new Builder with a list of fallback fonts.
+    pub fn from_fonts(fonts: Fonts<'a>) -> Self {
         Self {
             postprocessor: Default::default(),
             instance: None,
-            fonts: Fonts::new_vec(font, 24),
+            fonts,
             limits: None,
             present_mode: None,
-            width: NonZeroU32::new(1).unwrap(),
-            height: NonZeroU32::new(1).unwrap(),
+            width: 100,
+            height: 100,
             colors: named::DEFAULT_COLORS,
             reset_fg: Color::Black,
             reset_bg: Color::White,
@@ -161,11 +160,11 @@ where
         Self {
             postprocessor: postprocessor_builder,
             instance: None,
-            fonts: Fonts::new(font, 24),
+            fonts: Fonts::new(font, 22),
             limits: None,
             present_mode: None,
-            width: NonZeroU32::new(1).unwrap(),
-            height: NonZeroU32::new(1).unwrap(),
+            width: 100,
+            height: 100,
             colors: named::DEFAULT_COLORS,
             reset_fg: Color::Black,
             reset_bg: Color::White,
@@ -188,12 +187,18 @@ where
     }
 
     /// Use the specified font size in pixels. Defaults to 24px.
+    ///
+    /// __Note__
+    ///
+    /// Size 0 is ignored.
     #[must_use]
     pub fn with_font_size_px(
         mut self,
         size: u32,
     ) -> Self {
-        self.fonts.set_size_px(size);
+        if size > 0 {
+            self.fonts.set_size_px(size);
+        }
         self
     }
 
@@ -292,20 +297,23 @@ where
         mut self,
         dimensions: Dimensions,
     ) -> Self {
-        self.width = dimensions.width;
-        self.height = dimensions.height;
+        self.width = dimensions.width.get();
+        self.height = dimensions.height.get();
         self
     }
 
-    /// Use the specified height and width when creating the surface. Defaults
-    /// to 1x1.
+    /// Use the specified height and width when creating the surface.
+    ///
+    /// Defaults to 100x100.
+    /// Minimum size depends on the font. The window is at least 1x1 cells sized.
     #[must_use]
     pub fn with_width_and_height(
         mut self,
-        dimensions: Dimensions,
+        width: u32,
+        height: u32,
     ) -> Self {
-        self.width = dimensions.width;
-        self.height = dimensions.height;
+        self.width = width;
+        self.height = height;
         self
     }
 
@@ -495,11 +503,16 @@ where
             .await
             .map_err(Error::DeviceRequestFailed)?;
 
+        // this may create a surface that is bigger than the window.
+        //
+        let width = self.width.max(self.fonts.min_width_px());
+        let height = self.height.max(self.fonts.height_px());
+
         let mut surface_config = surface
             .get_default_config(
                 &adapter,
-                self.width.get().min(limits.max_texture_dimension_2d),
-                self.height.get().min(limits.max_texture_dimension_2d),
+                width.min(limits.max_texture_dimension_2d),
+                height.min(limits.max_texture_dimension_2d),
             )
             .ok_or(Error::SurfaceConfigurationRequestFailed)?;
 

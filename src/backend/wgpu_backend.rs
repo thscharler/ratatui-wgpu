@@ -625,6 +625,10 @@ fn flush_tui(
     // reset blink, removes flickering.
     tui_surface.cursor_blink = 0;
 
+    if bounds.width == 0 || bounds.height == 0 {
+        return;
+    }
+
     for (row_idx, row_cells) in tui_surface.cells.chunks(bounds.width as usize).enumerate() {
         if !tui_surface.dirty_rows[row_idx] {
             continue;
@@ -2034,7 +2038,7 @@ mod tests {
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
-                .with_width_and_height(Dimensions {
+                .with_dimensions(Dimensions {
                     width: NonZeroU32::new(512).unwrap(),
                     height: NonZeroU32::new(72).unwrap(),
                 })
@@ -2104,7 +2108,7 @@ mod tests {
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
-                .with_width_and_height(Dimensions {
+                .with_dimensions(Dimensions {
                     width: NonZeroU32::new(256).unwrap(),
                     height: NonZeroU32::new(72).unwrap(),
                 })
@@ -2173,7 +2177,7 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                .with_width_and_height(Dimensions {
+                .with_dimensions(Dimensions {
                     width: NonZeroU32::new(512).unwrap(),
                     height: NonZeroU32::new(72).unwrap(),
                 })
@@ -2243,7 +2247,7 @@ mod tests {
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
-                .with_width_and_height(Dimensions {
+                .with_dimensions(Dimensions {
                     width: NonZeroU32::new(512).unwrap(),
                     height: NonZeroU32::new(72).unwrap(),
                 })
@@ -2316,7 +2320,7 @@ mod tests {
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
-                .with_width_and_height(Dimensions {
+                .with_dimensions(Dimensions {
                     width: NonZeroU32::new(512).unwrap(),
                     height: NonZeroU32::new(72).unwrap(),
                 })
@@ -2392,7 +2396,7 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                .with_width_and_height(Dimensions {
+                .with_dimensions(Dimensions {
                     width: NonZeroU32::new(256).unwrap(),
                     height: NonZeroU32::new(72).unwrap(),
                 })
@@ -2510,7 +2514,7 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                .with_width_and_height(Dimensions {
+                .with_dimensions(Dimensions {
                     width: NonZeroU32::new(256).unwrap(),
                     height: NonZeroU32::new(72).unwrap(),
                 })
@@ -2578,7 +2582,7 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                .with_width_and_height(Dimensions {
+                .with_dimensions(Dimensions {
                     width: NonZeroU32::new(256).unwrap(),
                     height: NonZeroU32::new(72).unwrap(),
                 })
@@ -2648,7 +2652,7 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                .with_width_and_height(Dimensions {
+                .with_dimensions(Dimensions {
                     width: NonZeroU32::new(256).unwrap(),
                     height: NonZeroU32::new(72).unwrap(),
                 })
