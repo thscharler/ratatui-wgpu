@@ -46,10 +46,6 @@ impl<'a> Font<'a> {
 }
 
 impl Font<'_> {
-    pub(crate) fn id(&self) -> u64 {
-        self.id
-    }
-
     pub(crate) fn font(&'_ self) -> &'_ Face<'_> {
         &self.font
     }
@@ -167,7 +163,6 @@ pub struct Fonts<'a> {
 
     last_resort: Vec<Font<'a>>,
 
-    has_fonts: bool,
     regular: Vec<Font<'a>>,
     bold: Vec<Font<'a>>,
     italic: Vec<Font<'a>>,
@@ -198,7 +193,6 @@ impl<'a> Fonts<'a> {
             ascender: font.ascender(),
             em_advance: font.em_advance(),
             last_resort: vec![font],
-            has_fonts: false,
             regular: vec![],
             bold: vec![],
             italic: vec![],
@@ -234,7 +228,6 @@ impl<'a> Fonts<'a> {
             ascender: size_px as f32,
             em_advance: size_px as f32 / 2.0,
             last_resort: fonts,
-            has_fonts: false,
             regular: vec![],
             bold: vec![],
             italic: vec![],
@@ -271,7 +264,11 @@ impl<'a> Fonts<'a> {
     ) {
         self.char_height_px = height_px;
 
-        if self.has_fonts {
+        if !self.regular.is_empty()
+            || !self.bold.is_empty()
+            || !self.italic.is_empty()
+            || !self.bold_italic.is_empty()
+        {
             (
                 self.char_width_px,
                 self.scale,
@@ -292,7 +289,7 @@ impl<'a> Fonts<'a> {
                     )
                 })
                 .next() /* first is fine */
-                .unwrap_or_default();
+                .expect("font");
         } else {
             self.char_width_px = self.char_height_px / 2;
             self.scale = 1.0;
@@ -307,7 +304,6 @@ impl<'a> Fonts<'a> {
         self.italic.clear();
         self.bold.clear();
         self.regular.clear();
-        self.has_fonts = false;
     }
 
     /// Add a collection of fonts for various styles. They will automatically be
@@ -339,12 +335,6 @@ impl<'a> Fonts<'a> {
                 self.regular.push(font);
             }
         }
-
-        self.has_fonts = !self.bold_italic.is_empty()
-            || !self.italic.is_empty()
-            || !self.bold.is_empty()
-            || !self.regular.is_empty();
-
         self.set_size_px(self.char_height_px);
     }
 
@@ -360,7 +350,6 @@ impl<'a> Fonts<'a> {
             self.regular.push(font);
         }
         self.set_size_px(self.char_height_px);
-        self.has_fonts = self.has_fonts || !self.regular.is_empty();
     }
 
     /// Add a new collection of fonts for bold styled text. These fonts will
@@ -379,7 +368,6 @@ impl<'a> Fonts<'a> {
             self.bold.push(font);
         }
         self.set_size_px(self.char_height_px);
-        self.has_fonts = self.has_fonts || !self.bold.is_empty();
     }
 
     /// Add a new collection of fonts for italic styled text. These fonts will
@@ -399,7 +387,6 @@ impl<'a> Fonts<'a> {
             self.italic.push(font);
         }
         self.set_size_px(self.char_height_px);
-        self.has_fonts = self.has_fonts || !self.italic.is_empty();
     }
 
     /// Add a new collection of fonts for bold italic styled text. These fonts
@@ -418,11 +405,8 @@ impl<'a> Fonts<'a> {
             self.bold_italic.push(font);
         }
         self.set_size_px(self.char_height_px);
-        self.has_fonts = self.has_fonts || !self.bold_italic.is_empty();
     }
-}
 
-impl<'a> Fonts<'a> {
     /// Size of a cell with the current font in px.
     pub fn font_box(&self) -> FontBox {
         FontBox {
