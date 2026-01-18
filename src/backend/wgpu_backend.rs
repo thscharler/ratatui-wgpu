@@ -12,7 +12,7 @@ use crate::utils::text_atlas::Entry;
 use crate::utils::text_atlas::Key;
 use crate::utils::Outline;
 use crate::utils::Painter;
-use crate::{CursorStyle, PostProcessorBuilder, RandomState};
+use crate::{Blinking, CursorStyle, PostProcessorBuilder, RandomState};
 use bitvec::order::Lsb0;
 use bitvec::slice::BitSlice;
 use bitvec::vec::BitVec;
@@ -34,10 +34,9 @@ use rustybuzz::ttf_parser::RgbaColor;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::GlyphBuffer;
 use rustybuzz::UnicodeBuffer;
+use std::mem;
 use std::mem::size_of;
 use std::num::NonZeroU64;
-use std::time::SystemTime;
-use std::{iter, mem};
 use unicode_bidi::Level;
 use unicode_bidi::ParagraphBidiInfo;
 use unicode_properties::UnicodeEmoji;
@@ -372,15 +371,18 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     }
 
     /// Toggle blink.
-    pub fn blink(&mut self) {
+    pub fn blink(
+        &mut self,
+        blinking: Blinking,
+    ) {
         let bounds = self.size().unwrap();
 
         flush_blink(
+            blinking,
             bounds,
             &mut self.tui_surface,
             &self.rendered,
             &mut self.wgpu_vertices,
-            &self.wgpu_base.queue,
         );
 
         render(
@@ -392,6 +394,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
             self.wgpu_post_process.as_mut(),
             &self.wgpu_vertices,
         );
+
+        self.wgpu_vertices.clear();
     }
 }
 
@@ -448,81 +452,79 @@ fn render(
     post_process: &mut dyn PostProcessor,
     vertices: &WgpuVertices,
 ) {
+    if vertices.is_empty() && !post_process.needs_update() {
+        return;
+    }
+
     let mut encoder = base
         .device
         .create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Draw Encoder"),
         });
 
-    if !vertices.text_vertices.is_empty() {
-        {
-            let mut uniforms = base
-                .queue
-                .write_buffer_with(
-                    &pipeline.text_screen_size_buffer,
-                    0,
-                    NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap(),
-                )
-                .unwrap();
-            uniforms.copy_from_slice(bytemuck::cast_slice(&[
-                bounds.columns_rows.width as f32 * font_box.width as f32,
-                bounds.columns_rows.height as f32 * font_box.height as f32,
-                0.0,
-                0.0,
-            ]));
-        }
-
-        let bg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Text Bg Vertices"),
-            contents: bytemuck::cast_slice(&vertices.bg_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        let fg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Text Vertices"),
-            contents: bytemuck::cast_slice(&vertices.text_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        let indices = base.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Text Indices"),
-            contents: bytemuck::cast_slice(&vertices.text_indices),
-            usage: BufferUsages::INDEX,
-        });
-
-        {
-            let mut text_render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Text Render Pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &base.text_dest_view,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Load,
-                        store: StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                ..Default::default()
-            });
-
-            text_render_pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-
-            text_render_pass.set_pipeline(&pipeline.text_bg_compositor.pipeline);
-            text_render_pass.set_bind_group(0, &pipeline.text_bg_compositor.fs_uniforms, &[]);
-            text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
-            text_render_pass.draw_indexed(0..(vertices.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
-
-            text_render_pass.set_pipeline(&pipeline.text_fg_compositor.pipeline);
-            text_render_pass.set_bind_group(0, &pipeline.text_fg_compositor.fs_uniforms, &[]);
-            text_render_pass.set_bind_group(1, &pipeline.text_fg_compositor.atlas_bindings, &[]);
-
-            text_render_pass.set_vertex_buffer(0, fg_vertices.slice(..));
-            text_render_pass.draw_indexed(
-                0..(vertices.text_vertices.len() as u32 / 4) * 6,
+    {
+        let mut uniforms = base
+            .queue
+            .write_buffer_with(
+                &pipeline.text_screen_size_buffer,
                 0,
-                0..1,
-            );
-        }
+                NonZeroU64::new(size_of::<[f32; 4]>() as u64).unwrap(),
+            )
+            .unwrap();
+        uniforms.copy_from_slice(bytemuck::cast_slice(&[
+            bounds.columns_rows.width as f32 * font_box.width as f32,
+            bounds.columns_rows.height as f32 * font_box.height as f32,
+            0.0,
+            0.0,
+        ]));
+    }
+
+    let bg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("Text Bg Vertices"),
+        contents: bytemuck::cast_slice(&vertices.bg_vertices),
+        usage: BufferUsages::VERTEX,
+    });
+
+    let fg_vertices = base.device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("Text Vertices"),
+        contents: bytemuck::cast_slice(&vertices.text_vertices),
+        usage: BufferUsages::VERTEX,
+    });
+
+    let indices = base.device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("Text Indices"),
+        contents: bytemuck::cast_slice(&vertices.text_indices),
+        usage: BufferUsages::INDEX,
+    });
+
+    {
+        let mut text_render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Text Render Pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &base.text_dest_view,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            ..Default::default()
+        });
+
+        text_render_pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
+
+        text_render_pass.set_pipeline(&pipeline.text_bg_compositor.pipeline);
+        text_render_pass.set_bind_group(0, &pipeline.text_bg_compositor.fs_uniforms, &[]);
+        text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
+        text_render_pass.draw_indexed(0..(vertices.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
+
+        text_render_pass.set_pipeline(&pipeline.text_fg_compositor.pipeline);
+        text_render_pass.set_bind_group(0, &pipeline.text_fg_compositor.fs_uniforms, &[]);
+        text_render_pass.set_bind_group(1, &pipeline.text_fg_compositor.atlas_bindings, &[]);
+
+        text_render_pass.set_vertex_buffer(0, fg_vertices.slice(..));
+        text_render_pass.draw_indexed(0..(vertices.text_vertices.len() as u32 / 4) * 6, 0, 0..1);
     }
 
     let Some(texture) = base.surface.get_current_texture() else {
@@ -541,6 +543,7 @@ fn render(
     );
 
     base.queue.submit(Some(encoder.finish()));
+
     texture.present();
 }
 
@@ -766,19 +769,17 @@ fn flush_tui(
 }
 
 fn flush_blink(
+    blinking: Blinking,
     bounds: ratatui_core::layout::Size,
     tui_surface: &mut TuiSurface,
     rendered: &Vec<Rendered>,
     wgpu_vertices: &mut WgpuVertices,
-    queue: &Queue,
 ) {
     wgpu_vertices.bg_vertices.clear();
     wgpu_vertices.text_vertices.clear();
     wgpu_vertices.text_indices.clear();
 
     tui_surface.blink = tui_surface.blink.wrapping_add(1);
-    tui_surface.cursor_blink = tui_surface.cursor_blink.wrapping_add(1);
-
     if tui_surface.fast_blink_divisor != 0
         && tui_surface.blink % tui_surface.fast_blink_divisor == 0
     {
@@ -789,28 +790,34 @@ fn flush_blink(
     {
         tui_surface.slow_blink_showing = !tui_surface.slow_blink_showing;
     }
+
+    tui_surface.cursor_blink = tui_surface.cursor_blink.wrapping_add(1);
     if tui_surface.cursor_divisor != 0 && tui_surface.cursor_blink % tui_surface.cursor_divisor == 0
     {
         tui_surface.cursor_showing = !tui_surface.cursor_showing;
     }
 
-    let mut index_offset = 0;
-
-    let cell_indexes = tui_surface
-        .fast_blinking
-        .iter_ones()
-        .chain(tui_surface.slow_blinking.iter_ones())
-        .chain(iter::once(
+    let mut cell_indexes = if blinking & Blinking::TEXT {
+        tui_surface
+            .fast_blinking
+            .iter_ones()
+            .chain(tui_surface.slow_blinking.iter_ones())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if tui_surface.cursor_visible && blinking & Blinking::CURSOR {
+        cell_indexes.push(
             tui_surface.cursor.1 as usize * bounds.width as usize + tui_surface.cursor.0 as usize,
-        ))
-        .collect::<Vec<_>>();
+        )
+    };
+
+    let mut index_offset = 0;
     for index in cell_indexes {
         if let Some(to_render) = rendered.get(index) {
             append_rendered(&tui_surface, to_render, &mut index_offset, wgpu_vertices);
         }
     }
-
-    queue.submit([]);
 }
 
 fn append_dirty_rows(
@@ -818,7 +825,6 @@ fn append_dirty_rows(
     wgpu_post_process: &dyn PostProcessor,
     rendered: &Vec<Rendered>,
     wgpu_vertices: &mut WgpuVertices,
-    queue: &Queue,
 ) {
     if wgpu_post_process.needs_update() || tui_surface.dirty_rows.any() {
         wgpu_vertices.bg_vertices.clear();
@@ -839,8 +845,6 @@ fn append_dirty_rows(
             .dirty_cells
             .iter_mut()
             .for_each(|mut v| *v = false);
-
-        queue.submit([]);
     }
 }
 
@@ -1157,7 +1161,6 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             self.wgpu_post_process.as_ref(),
             &self.rendered,
             &mut self.wgpu_vertices,
-            &self.wgpu_base.queue,
         );
 
         render(
@@ -1169,6 +1172,8 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
             self.wgpu_post_process.as_mut(),
             &self.wgpu_vertices,
         );
+
+        self.wgpu_vertices.clear();
 
         Ok(())
     }

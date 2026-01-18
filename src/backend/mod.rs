@@ -3,6 +3,7 @@ pub(crate) mod wgpu_backend;
 
 use std::num::NonZeroU32;
 
+use crate::fonts::FontBox;
 use crate::utils::text_atlas::Atlas;
 use wgpu::BindGroup;
 use wgpu::CommandEncoder;
@@ -20,7 +21,6 @@ use wgpu::TextureUsages;
 use wgpu::TextureView;
 use wgpu::TextureViewDescriptor;
 use wgpu::{Adapter, Buffer, Texture};
-use crate::fonts::FontBox;
 
 pub trait PostProcessorBuilder {
     /// Resulting postprocessor.
@@ -343,6 +343,18 @@ struct WgpuPipeline {
     text_screen_size_buffer: Buffer,
     text_bg_compositor: TextCacheBgPipeline,
     text_fg_compositor: TextCacheFgPipeline,
+}
+
+impl WgpuVertices {
+    pub fn is_empty(&self) -> bool {
+        self.bg_vertices.is_empty() && self.text_vertices.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.text_indices.clear();
+        self.bg_vertices.clear();
+        self.text_vertices.clear();
+    }
 }
 
 fn build_wgpu_state(

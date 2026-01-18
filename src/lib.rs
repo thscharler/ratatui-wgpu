@@ -130,6 +130,7 @@ pub mod shaders;
 pub(crate) mod utils;
 
 pub use ratatui_core;
+use std::ops::{BitAnd, BitOr};
 use thiserror::Error;
 pub use wgpu;
 
@@ -190,6 +191,37 @@ impl CursorStyle {
             CursorStyle::BoldBar => CursorStyle::RtlBoldBar,
             v => v,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct Blinking(u8);
+
+impl Blinking {
+    pub const CURSOR: Blinking = Blinking(1);
+    pub const TEXT: Blinking = Blinking(2);
+}
+
+impl BitOr for Blinking {
+    type Output = Blinking;
+
+    fn bitor(
+        self,
+        rhs: Self,
+    ) -> Self::Output {
+        Blinking(self.0 | rhs.0)
+    }
+}
+
+impl BitAnd for Blinking {
+    type Output = bool;
+
+    fn bitand(
+        self,
+        rhs: Self,
+    ) -> Self::Output {
+        (self.0 & rhs.0) != 0
     }
 }
 
