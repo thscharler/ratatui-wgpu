@@ -1397,6 +1397,8 @@ fn shape(
 
         let is_emoji =
             ch.is_emoji_char() && ch.general_category_group() != GeneralCategoryGroup::Number;
+        let block_char = (ch as u32) >= 0x2500 && (ch as u32) <= 0x259F;
+
         let (cached, image) = rasterize_glyph(
             cached,
             metrics,
@@ -1406,6 +1408,7 @@ fn shape(
             advance_scale,
             font_box.ascender,
             is_emoji,
+            block_char,
             ch.general_category(),
             font.is_fallback(),
         );
@@ -1464,8 +1467,9 @@ fn rasterize_glyph(
     bold: bool,
     italic: bool,
     advance_scale: f32,
-    ascender: f32,
+    mut ascender: f32,
     emoji: bool,
+    block_char: bool,
     category: GeneralCategory,
     is_fallback: bool,
 ) -> (CacheRect, Vec<u32>) {
@@ -1483,7 +1487,17 @@ fn rasterize_glyph(
 
     let scale;
     let scale_y;
-    if is_fallback {
+    if is_fallback && block_char {
+        let rect_scale_y = cached.height as f32 / (metrics.height() as f32);
+
+        ascender = (metrics.ascender() as f32) * (rect_scale_y / advance_scale);
+
+        computed_offset_x = 0.0;
+        computed_offset_y = 0.0;
+
+        scale = rect_scale_y * 2.0;
+        scale_y = rect_scale_y * 2.0;
+    } else if is_fallback {
         // glyphs from a fallback font will probably not fit.
         // scale them down either vertically or horizontally, whatever fits.
         // then align them centered.
