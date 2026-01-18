@@ -18,7 +18,7 @@ use ratatui_core::style::Color;
 use rustybuzz::UnicodeBuffer;
 use std::num::NonZeroU32;
 use std::num::NonZeroU64;
-use wgpu::include_wgsl;
+use wgpu::{include_wgsl, MemoryHints};
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 use wgpu::vertex_attr_array;
@@ -82,6 +82,7 @@ const CACHE_HEIGHT: u32 = 1200;
 pub struct Builder<'a, P> {
     postprocessor: P,
     fonts: Fonts<'a>,
+    backends: Backends,
     instance: Option<Instance>,
     limits: Option<Limits>,
     present_mode: Option<PresentMode>,
@@ -122,6 +123,7 @@ where
             cursor_blink: 5,
             cursor_style: Default::default(),
             cursor_color: Color::Reset,
+            backends: Default::default(),
         }
     }
 
@@ -143,6 +145,7 @@ where
             cursor_blink: 5,
             cursor_style: Default::default(),
             cursor_color: Color::Reset,
+            backends: Default::default(),
         }
     }
 }
@@ -173,7 +176,18 @@ where
             cursor_blink: 5,
             cursor_style: Default::default(),
             cursor_color: Color::Reset,
+            backends: Default::default(),
         }
+    }
+
+    /// Use one of the given Backends.
+    #[must_use]
+    pub fn with_backends(
+        mut self,
+        backends: Backends,
+    ) -> Self {
+        self.backends = backends;
+        self
     }
 
     /// Use the supplied [`wgpu::Instance`] when building the backend.
@@ -429,17 +443,19 @@ where
         target: impl Into<SurfaceTarget<'s>>,
     ) -> Result<WgpuBackend<'a, 's>> {
         let instance = self.instance.get_or_insert_with(|| {
-            wgpu::Instance::new(&InstanceDescriptor {
-                backends: Backends::default(),
+            Instance::new(&InstanceDescriptor {
+                backends: self.backends,
                 flags: InstanceFlags::default(),
                 ..Default::default()
             })
         });
+
         let surface = instance
             .create_surface(target)
             .map_err(Error::SurfaceCreationFailed)?;
 
-        self.build_with_surface(surface).await
+        self.build_with_render_surface(RenderSurface::new_surface(surface))
+            .await
     }
 
     /// Build a new backend from this builder with the supplied surface. You
@@ -474,8 +490,8 @@ where
         mut surface: RenderSurface<'s>,
     ) -> Result<WgpuBackend<'a, 's>> {
         let instance = self.instance.get_or_insert_with(|| {
-            wgpu::Instance::new(&InstanceDescriptor {
-                backends: Backends::default(),
+            Instance::new(&InstanceDescriptor {
+                backends: self.backends,
                 flags: InstanceFlags::default(),
                 ..Default::default()
             })
@@ -490,30 +506,29 @@ where
             .map_err(Error::AdapterRequestFailed)?;
 
         let limits = if let Some(limits) = self.limits {
-            min_limits(&adapter, limits)
+            limits
         } else {
-            adapter.limits()
+            Limits::downlevel_defaults()
         };
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                required_limits: limits.clone(),
-                ..Default::default()
+                label: Some("ratatui-wgpu Device"),
+                required_features: Default::default(),
+                required_limits: limits,
+                experimental_features: Default::default(),
+                memory_hints: MemoryHints::MemoryUsage,
+                trace: Default::default(),
             })
             .await
             .map_err(Error::DeviceRequestFailed)?;
 
         // this may create a surface that is bigger than the window.
-        //
         let width = self.width.max(self.fonts.min_width_px());
         let height = self.height.max(self.fonts.height_px());
 
         let mut surface_config = surface
-            .get_default_config(
-                &adapter,
-                width.min(limits.max_texture_dimension_2d),
-                height.min(limits.max_texture_dimension_2d),
-            )
+            .get_default_config(&adapter, width, height)
             .ok_or(Error::SurfaceConfigurationRequestFailed)?;
 
         if let Some(mode) = self.present_mode {
@@ -859,445 +874,5 @@ fn build_text_fg_compositor(
         pipeline,
         fs_uniforms,
         atlas_bindings,
-    }
-}
-
-fn min_limits(
-    adapter: &wgpu::Adapter,
-    limits: Limits,
-) -> Limits {
-    let Limits {
-        max_texture_dimension_1d: max_texture_dimension_1d_wl,
-        max_texture_dimension_2d: max_texture_dimension_2d_wl,
-        max_texture_dimension_3d: max_texture_dimension_3d_wl,
-        max_texture_array_layers: max_texture_array_layers_wl,
-        max_bind_groups: max_bind_groups_wl,
-        max_bindings_per_bind_group: max_bindings_per_bind_group_wl,
-        max_dynamic_uniform_buffers_per_pipeline_layout:
-            max_dynamic_uniform_buffers_per_pipeline_layout_wl,
-        max_dynamic_storage_buffers_per_pipeline_layout:
-            max_dynamic_storage_buffers_per_pipeline_layout_wl,
-        max_sampled_textures_per_shader_stage: max_sampled_textures_per_shader_stage_wl,
-        max_samplers_per_shader_stage: max_samplers_per_shader_stage_wl,
-        max_storage_buffers_per_shader_stage: max_storage_buffers_per_shader_stage_wl,
-        max_storage_textures_per_shader_stage: max_storage_textures_per_shader_stage_wl,
-        max_uniform_buffers_per_shader_stage: max_uniform_buffers_per_shader_stage_wl,
-        max_uniform_buffer_binding_size: max_uniform_buffer_binding_size_wl,
-        max_storage_buffer_binding_size: max_storage_buffer_binding_size_wl,
-        max_vertex_buffers: max_vertex_buffers_wl,
-        max_buffer_size: max_buffer_size_wl,
-        max_vertex_attributes: max_vertex_attributes_wl,
-        max_vertex_buffer_array_stride: max_vertex_buffer_array_stride_wl,
-        min_uniform_buffer_offset_alignment: min_uniform_buffer_offset_alignment_wl,
-        min_storage_buffer_offset_alignment: min_storage_buffer_offset_alignment_wl,
-        max_inter_stage_shader_components: max_inter_stage_shader_components_wl,
-        max_color_attachments: max_color_attachments_wl,
-        max_color_attachment_bytes_per_sample: max_color_attachment_bytes_per_sample_wl,
-        max_compute_workgroup_storage_size: max_compute_workgroup_storage_size_wl,
-        max_compute_invocations_per_workgroup: max_compute_invocations_per_workgroup_wl,
-        max_compute_workgroup_size_x: max_compute_workgroup_size_x_wl,
-        max_compute_workgroup_size_y: max_compute_workgroup_size_y_wl,
-        max_compute_workgroup_size_z: max_compute_workgroup_size_z_wl,
-        max_compute_workgroups_per_dimension: max_compute_workgroups_per_dimension_wl,
-        max_non_sampler_bindings: max_non_sampler_bindings_wl,
-        max_binding_array_elements_per_shader_stage: max_binding_array_elements_per_shader_stage_wl,
-        max_binding_array_sampler_elements_per_shader_stage:
-            max_binding_array_sampler_elements_per_shader_stage_wl,
-        max_blas_primitive_count: max_blas_primitive_count_wl,
-        max_blas_geometry_count: max_blas_geometry_count_wl,
-        max_tlas_instance_count: max_tlas_instance_count_wl,
-        max_acceleration_structures_per_shader_stage:
-            max_acceleration_structures_per_shader_stage_wl,
-        max_immediate_size: max_immediate_size_wl,
-        max_task_mesh_workgroup_total_count: max_task_mesh_workgroup_total_count_wl,
-        max_task_mesh_workgroups_per_dimension: max_task_mesh_workgroups_per_dimension_wl,
-        max_task_invocations_per_workgroup: max_task_invocations_per_workgroup_wl,
-        max_task_invocations_per_dimension: max_task_invocations_per_dimension_wl,
-        max_mesh_invocations_per_workgroup: max_mesh_invocations_per_workgroup_wl,
-        max_mesh_invocations_per_dimension: max_mesh_invocations_per_dimension_wl,
-        max_task_payload_size: max_task_payload_size_wl,
-        max_mesh_output_vertices: max_mesh_output_vertices_wl,
-        max_mesh_output_primitives: max_mesh_output_primitives_wl,
-        max_mesh_output_layers: max_mesh_output_layers_wl,
-        max_mesh_multiview_view_count: max_mesh_multiview_view_count_wl,
-        max_multiview_view_count: max_multiview_view_count_wl,
-    } = limits;
-    let Limits {
-        max_texture_dimension_1d: max_texture_dimension_1d_al,
-        max_texture_dimension_2d: max_texture_dimension_2d_al,
-        max_texture_dimension_3d: max_texture_dimension_3d_al,
-        max_texture_array_layers: max_texture_array_layers_al,
-        max_bind_groups: max_bind_groups_al,
-        max_bindings_per_bind_group: max_bindings_per_bind_group_al,
-        max_dynamic_uniform_buffers_per_pipeline_layout:
-            max_dynamic_uniform_buffers_per_pipeline_layout_al,
-        max_dynamic_storage_buffers_per_pipeline_layout:
-            max_dynamic_storage_buffers_per_pipeline_layout_al,
-        max_sampled_textures_per_shader_stage: max_sampled_textures_per_shader_stage_al,
-        max_samplers_per_shader_stage: max_samplers_per_shader_stage_al,
-        max_storage_buffers_per_shader_stage: max_storage_buffers_per_shader_stage_al,
-        max_storage_textures_per_shader_stage: max_storage_textures_per_shader_stage_al,
-        max_uniform_buffers_per_shader_stage: max_uniform_buffers_per_shader_stage_al,
-        max_uniform_buffer_binding_size: max_uniform_buffer_binding_size_al,
-        max_storage_buffer_binding_size: max_storage_buffer_binding_size_al,
-        max_vertex_buffers: max_vertex_buffers_al,
-        max_buffer_size: max_buffer_size_al,
-        max_vertex_attributes: max_vertex_attributes_al,
-        max_vertex_buffer_array_stride: max_vertex_buffer_array_stride_al,
-        min_uniform_buffer_offset_alignment: min_uniform_buffer_offset_alignment_al,
-        min_storage_buffer_offset_alignment: min_storage_buffer_offset_alignment_al,
-        max_inter_stage_shader_components: max_inter_stage_shader_components_al,
-        max_color_attachments: max_color_attachments_al,
-        max_color_attachment_bytes_per_sample: max_color_attachment_bytes_per_sample_al,
-        max_compute_workgroup_storage_size: max_compute_workgroup_storage_size_al,
-        max_compute_invocations_per_workgroup: max_compute_invocations_per_workgroup_al,
-        max_compute_workgroup_size_x: max_compute_workgroup_size_x_al,
-        max_compute_workgroup_size_y: max_compute_workgroup_size_y_al,
-        max_compute_workgroup_size_z: max_compute_workgroup_size_z_al,
-        max_compute_workgroups_per_dimension: max_compute_workgroups_per_dimension_al,
-        max_non_sampler_bindings: max_non_sampler_bindings_al,
-        max_binding_array_elements_per_shader_stage: max_binding_array_elements_per_shader_stage_al,
-        max_binding_array_sampler_elements_per_shader_stage:
-            max_binding_array_sampler_elements_per_shader_stage_al,
-        max_blas_primitive_count: max_blas_primitive_count_al,
-        max_blas_geometry_count: max_blas_geometry_count_al,
-        max_tlas_instance_count: max_tlas_instance_count_al,
-        max_acceleration_structures_per_shader_stage:
-            max_acceleration_structures_per_shader_stage_al,
-        max_immediate_size: max_immediate_size_al,
-        max_task_mesh_workgroup_total_count: max_task_mesh_workgroup_total_count_al,
-        max_task_mesh_workgroups_per_dimension: max_task_mesh_workgroups_per_dimension_al,
-        max_task_invocations_per_workgroup: max_task_invocations_per_workgroup_al,
-        max_task_invocations_per_dimension: max_task_invocations_per_dimension_al,
-        max_mesh_invocations_per_workgroup: max_mesh_invocations_per_workgroup_al,
-        max_mesh_invocations_per_dimension: max_mesh_invocations_per_dimension_al,
-        max_task_payload_size: max_task_payload_size_al,
-        max_mesh_output_vertices: max_mesh_output_vertices_al,
-        max_mesh_output_primitives: max_mesh_output_primitives_al,
-        max_mesh_output_layers: max_mesh_output_layers_al,
-        max_mesh_multiview_view_count: max_mesh_multiview_view_count_al,
-        max_multiview_view_count: max_multiview_view_count_al,
-    } = adapter.limits();
-
-    Limits {
-        max_texture_dimension_1d: if max_texture_dimension_1d_wl <= max_texture_dimension_1d_al {
-            max_texture_dimension_1d_wl
-        } else {
-            max_texture_dimension_1d_al
-        },
-        max_texture_dimension_2d: if max_texture_dimension_2d_wl <= max_texture_dimension_2d_al {
-            max_texture_dimension_2d_wl
-        } else {
-            max_texture_dimension_2d_al
-        },
-        max_texture_dimension_3d: if max_texture_dimension_3d_wl <= max_texture_dimension_3d_al {
-            max_texture_dimension_3d_wl
-        } else {
-            max_texture_dimension_3d_al
-        },
-        max_texture_array_layers: if max_texture_array_layers_wl <= max_texture_array_layers_al {
-            max_texture_array_layers_wl
-        } else {
-            max_texture_array_layers_al
-        },
-        max_bind_groups: if max_bind_groups_wl <= max_bind_groups_al {
-            max_bind_groups_wl
-        } else {
-            max_bind_groups_al
-        },
-        max_bindings_per_bind_group: if max_bindings_per_bind_group_wl
-            <= max_bindings_per_bind_group_al
-        {
-            max_bindings_per_bind_group_wl
-        } else {
-            max_bindings_per_bind_group_al
-        },
-        max_dynamic_uniform_buffers_per_pipeline_layout:
-            if max_dynamic_uniform_buffers_per_pipeline_layout_wl
-                <= max_dynamic_uniform_buffers_per_pipeline_layout_al
-            {
-                max_dynamic_uniform_buffers_per_pipeline_layout_wl
-            } else {
-                max_dynamic_uniform_buffers_per_pipeline_layout_al
-            },
-        max_dynamic_storage_buffers_per_pipeline_layout:
-            if max_dynamic_storage_buffers_per_pipeline_layout_wl
-                <= max_dynamic_storage_buffers_per_pipeline_layout_al
-            {
-                max_dynamic_storage_buffers_per_pipeline_layout_wl
-            } else {
-                max_dynamic_storage_buffers_per_pipeline_layout_al
-            },
-        max_sampled_textures_per_shader_stage: if max_sampled_textures_per_shader_stage_wl
-            <= max_sampled_textures_per_shader_stage_al
-        {
-            max_sampled_textures_per_shader_stage_wl
-        } else {
-            max_sampled_textures_per_shader_stage_al
-        },
-        max_samplers_per_shader_stage: if max_samplers_per_shader_stage_wl
-            <= max_samplers_per_shader_stage_al
-        {
-            max_samplers_per_shader_stage_wl
-        } else {
-            max_samplers_per_shader_stage_al
-        },
-        max_storage_buffers_per_shader_stage: if max_storage_buffers_per_shader_stage_wl
-            <= max_storage_buffers_per_shader_stage_al
-        {
-            max_storage_buffers_per_shader_stage_wl
-        } else {
-            max_storage_buffers_per_shader_stage_al
-        },
-        max_storage_textures_per_shader_stage: if max_storage_textures_per_shader_stage_wl
-            <= max_storage_textures_per_shader_stage_al
-        {
-            max_storage_textures_per_shader_stage_wl
-        } else {
-            max_storage_textures_per_shader_stage_al
-        },
-        max_uniform_buffers_per_shader_stage: if max_uniform_buffers_per_shader_stage_wl
-            <= max_uniform_buffers_per_shader_stage_al
-        {
-            max_uniform_buffers_per_shader_stage_wl
-        } else {
-            max_uniform_buffers_per_shader_stage_al
-        },
-        max_uniform_buffer_binding_size: if max_uniform_buffer_binding_size_wl
-            <= max_uniform_buffer_binding_size_al
-        {
-            max_uniform_buffer_binding_size_wl
-        } else {
-            max_uniform_buffer_binding_size_al
-        },
-        max_storage_buffer_binding_size: if max_storage_buffer_binding_size_wl
-            <= max_storage_buffer_binding_size_al
-        {
-            max_storage_buffer_binding_size_wl
-        } else {
-            max_storage_buffer_binding_size_al
-        },
-        max_vertex_buffers: if max_vertex_buffers_wl <= max_vertex_buffers_al {
-            max_vertex_buffers_wl
-        } else {
-            max_vertex_buffers_al
-        },
-        max_buffer_size: if max_buffer_size_wl <= max_buffer_size_al {
-            max_buffer_size_wl
-        } else {
-            max_buffer_size_al
-        },
-        max_vertex_attributes: if max_vertex_attributes_wl <= max_vertex_attributes_al {
-            max_vertex_attributes_wl
-        } else {
-            max_vertex_attributes_al
-        },
-        max_vertex_buffer_array_stride: if max_vertex_buffer_array_stride_wl
-            <= max_vertex_buffer_array_stride_al
-        {
-            max_vertex_buffer_array_stride_wl
-        } else {
-            max_vertex_buffer_array_stride_al
-        },
-        min_uniform_buffer_offset_alignment: if min_uniform_buffer_offset_alignment_wl
-            <= min_uniform_buffer_offset_alignment_al
-        {
-            min_uniform_buffer_offset_alignment_wl
-        } else {
-            min_uniform_buffer_offset_alignment_al
-        },
-        min_storage_buffer_offset_alignment: if min_storage_buffer_offset_alignment_wl
-            <= min_storage_buffer_offset_alignment_al
-        {
-            min_storage_buffer_offset_alignment_wl
-        } else {
-            min_storage_buffer_offset_alignment_al
-        },
-        max_inter_stage_shader_components: if max_inter_stage_shader_components_wl
-            <= max_inter_stage_shader_components_al
-        {
-            max_inter_stage_shader_components_wl
-        } else {
-            max_inter_stage_shader_components_al
-        },
-        max_color_attachments: if max_color_attachments_wl <= max_color_attachments_al {
-            max_color_attachments_wl
-        } else {
-            max_color_attachments_al
-        },
-        max_color_attachment_bytes_per_sample: if max_color_attachment_bytes_per_sample_wl
-            <= max_color_attachment_bytes_per_sample_al
-        {
-            max_color_attachment_bytes_per_sample_wl
-        } else {
-            max_color_attachment_bytes_per_sample_al
-        },
-        max_compute_workgroup_storage_size: if max_compute_workgroup_storage_size_wl
-            <= max_compute_workgroup_storage_size_al
-        {
-            max_compute_workgroup_storage_size_wl
-        } else {
-            max_compute_workgroup_storage_size_al
-        },
-        max_compute_invocations_per_workgroup: if max_compute_invocations_per_workgroup_wl
-            <= max_compute_invocations_per_workgroup_al
-        {
-            max_compute_invocations_per_workgroup_wl
-        } else {
-            max_compute_invocations_per_workgroup_al
-        },
-        max_compute_workgroup_size_x: if max_compute_workgroup_size_x_wl
-            <= max_compute_workgroup_size_x_al
-        {
-            max_compute_workgroup_size_x_wl
-        } else {
-            max_compute_workgroup_size_x_al
-        },
-        max_compute_workgroup_size_y: if max_compute_workgroup_size_y_wl
-            <= max_compute_workgroup_size_y_al
-        {
-            max_compute_workgroup_size_y_wl
-        } else {
-            max_compute_workgroup_size_y_al
-        },
-        max_compute_workgroup_size_z: if max_compute_workgroup_size_z_wl
-            <= max_compute_workgroup_size_z_al
-        {
-            max_compute_workgroup_size_z_wl
-        } else {
-            max_compute_workgroup_size_z_al
-        },
-        max_compute_workgroups_per_dimension: if max_compute_workgroups_per_dimension_wl
-            <= max_compute_workgroups_per_dimension_al
-        {
-            max_compute_workgroups_per_dimension_wl
-        } else {
-            max_compute_workgroups_per_dimension_al
-        },
-        max_non_sampler_bindings: if max_non_sampler_bindings_wl <= max_non_sampler_bindings_al {
-            max_non_sampler_bindings_wl
-        } else {
-            max_non_sampler_bindings_al
-        },
-        max_binding_array_elements_per_shader_stage:
-            if max_binding_array_elements_per_shader_stage_wl
-                <= max_binding_array_elements_per_shader_stage_al
-            {
-                max_binding_array_elements_per_shader_stage_wl
-            } else {
-                max_binding_array_elements_per_shader_stage_al
-            },
-        max_binding_array_sampler_elements_per_shader_stage:
-            if max_binding_array_sampler_elements_per_shader_stage_wl
-                <= max_binding_array_sampler_elements_per_shader_stage_al
-            {
-                max_binding_array_sampler_elements_per_shader_stage_wl
-            } else {
-                max_binding_array_sampler_elements_per_shader_stage_al
-            },
-        max_blas_primitive_count: if max_blas_primitive_count_wl <= max_blas_primitive_count_al {
-            max_blas_primitive_count_wl
-        } else {
-            max_blas_primitive_count_al
-        },
-        max_blas_geometry_count: if max_blas_geometry_count_wl <= max_blas_geometry_count_al {
-            max_blas_geometry_count_wl
-        } else {
-            max_blas_geometry_count_al
-        },
-        max_tlas_instance_count: if max_tlas_instance_count_wl <= max_tlas_instance_count_al {
-            max_tlas_instance_count_wl
-        } else {
-            max_tlas_instance_count_al
-        },
-        max_acceleration_structures_per_shader_stage:
-            if max_acceleration_structures_per_shader_stage_wl
-                <= max_acceleration_structures_per_shader_stage_al
-            {
-                max_acceleration_structures_per_shader_stage_wl
-            } else {
-                max_acceleration_structures_per_shader_stage_al
-            },
-        max_immediate_size: if max_immediate_size_wl <= max_immediate_size_al {
-            max_immediate_size_wl
-        } else {
-            max_immediate_size_al
-        },
-        max_task_mesh_workgroup_total_count: if max_task_mesh_workgroup_total_count_wl
-            <= max_task_mesh_workgroup_total_count_al
-        {
-            max_task_mesh_workgroup_total_count_wl
-        } else {
-            max_task_mesh_workgroup_total_count_al
-        },
-        max_task_mesh_workgroups_per_dimension: if max_task_mesh_workgroups_per_dimension_wl
-            <= max_task_mesh_workgroups_per_dimension_al
-        {
-            max_task_mesh_workgroups_per_dimension_wl
-        } else {
-            max_task_mesh_workgroups_per_dimension_al
-        },
-        max_task_invocations_per_workgroup: if max_task_invocations_per_workgroup_wl
-            <= max_task_invocations_per_workgroup_al
-        {
-            max_task_invocations_per_workgroup_wl
-        } else {
-            max_task_invocations_per_workgroup_al
-        },
-        max_task_invocations_per_dimension: if max_task_invocations_per_dimension_wl
-            <= max_task_invocations_per_dimension_al
-        {
-            max_task_invocations_per_dimension_wl
-        } else {
-            max_task_invocations_per_dimension_al
-        },
-        max_mesh_invocations_per_workgroup: if max_mesh_invocations_per_workgroup_wl
-            <= max_mesh_invocations_per_workgroup_al
-        {
-            max_mesh_invocations_per_workgroup_wl
-        } else {
-            max_mesh_invocations_per_workgroup_al
-        },
-        max_mesh_invocations_per_dimension: if max_mesh_invocations_per_dimension_wl
-            <= max_mesh_invocations_per_dimension_al
-        {
-            max_mesh_invocations_per_dimension_wl
-        } else {
-            max_mesh_invocations_per_dimension_al
-        },
-        max_task_payload_size: if max_task_payload_size_wl <= max_task_payload_size_al {
-            max_task_payload_size_wl
-        } else {
-            max_task_payload_size_al
-        },
-        max_mesh_output_vertices: if max_mesh_output_vertices_wl <= max_mesh_output_vertices_al {
-            max_mesh_output_vertices_wl
-        } else {
-            max_mesh_output_vertices_al
-        },
-        max_mesh_output_primitives: if max_mesh_output_primitives_wl
-            <= max_mesh_output_primitives_al
-        {
-            max_mesh_output_primitives_wl
-        } else {
-            max_mesh_output_primitives_al
-        },
-        max_mesh_output_layers: if max_mesh_output_layers_wl <= max_mesh_output_layers_al {
-            max_mesh_output_layers_wl
-        } else {
-            max_mesh_output_layers_al
-        },
-        max_mesh_multiview_view_count: if max_mesh_multiview_view_count_wl
-            <= max_mesh_multiview_view_count_al
-        {
-            max_mesh_multiview_view_count_wl
-        } else {
-            max_mesh_multiview_view_count_al
-        },
-        max_multiview_view_count: if max_multiview_view_count_wl <= max_multiview_view_count_al {
-            max_multiview_view_count_wl
-        } else {
-            max_multiview_view_count_al
-        },
     }
 }

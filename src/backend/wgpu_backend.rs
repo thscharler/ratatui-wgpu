@@ -634,8 +634,6 @@ fn flush_tui(
             continue;
         }
 
-        let tt = SystemTime::now();
-
         let row_offset = row_idx.min(bounds.height as usize - 1) * bounds.width as usize;
 
         // This block concatenates the strings for the row into one string for bidi
@@ -764,8 +762,6 @@ fn flush_tui(
             wgpu_atlas,
             queue,
         );
-
-        debug!("{} render row {:?}", row_idx, tt.elapsed());
     }
 }
 
