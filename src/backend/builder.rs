@@ -686,6 +686,28 @@ where
     }
 }
 
+pub(super) fn build_img_size_bindings(
+    img_pipeline: &ImgPipeline,
+    device: &Device,
+    img_size: &Buffer,
+    view_size: &Buffer,
+) -> BindGroup {
+    device.create_bind_group(&BindGroupDescriptor {
+        label: Some("Img Size Binding"),
+        layout: &img_pipeline.image_shader_layout,
+        entries: &[
+            BindGroupEntry {
+                binding: 0,
+                resource: img_size.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: view_size.as_entire_binding(),
+            },
+        ],
+    })
+}
+
 pub(super) fn build_img_bindings(
     img_pipeline: &ImgPipeline,
     device: &Device,
@@ -728,6 +750,32 @@ fn build_img_compositor(
         }],
     });
 
+    let image_shader_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("Image Size Uniforms Binding Layout"),
+        entries: &[
+            BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 2]>() as u64).unwrap()),
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 1,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 2]>() as u64).unwrap()),
+                },
+                count: None,
+            },
+        ],
+    });
+
     let fs_uniforms = device.create_bind_group(&BindGroupDescriptor {
         label: Some("Image Compositor Uniforms Binding"),
         layout: &vertex_shader_layout,
@@ -761,7 +809,11 @@ fn build_img_compositor(
 
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Img Compositor Layout"),
-        bind_group_layouts: &[&vertex_shader_layout, &fragment_shader_layout],
+        bind_group_layouts: &[
+            &vertex_shader_layout,
+            &image_shader_layout,
+            &fragment_shader_layout,
+        ],
         immediate_size: 0,
     });
 
@@ -799,6 +851,7 @@ fn build_img_compositor(
     });
 
     ImgPipeline {
+        image_shader_layout,
         fragment_shader_layout,
         pipeline,
         fs_uniforms,

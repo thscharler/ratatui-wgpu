@@ -1,9 +1,8 @@
-use std::cmp::max;
-use crate::backend::builder::build_img_bindings;
-use crate::backend::{TextVertexMember, WgpuImage};
+use crate::backend::builder::{build_img_bindings, build_img_size_bindings};
 use crate::backend::{build_wgpu_state, ImgVertexMember};
 use crate::backend::{PostProcessor, WgpuAtlas, WgpuBase, WgpuPipeline, WgpuVertices};
 use crate::backend::{TextBgVertexMember, WgpuImages};
+use crate::backend::{TextVertexMember, WgpuImage};
 use crate::colors::ColorTable;
 use crate::colors::Rgb;
 use crate::fonts::Fonts;
@@ -36,6 +35,7 @@ use rustybuzz::ttf_parser::RgbaColor;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::GlyphBuffer;
 use rustybuzz::UnicodeBuffer;
+use std::cmp::max;
 use std::mem;
 use std::mem::size_of;
 use std::num::NonZeroU64;
@@ -47,7 +47,6 @@ use unicode_properties::{GeneralCategory, GeneralCategoryGroup};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
-use wgpu::IndexFormat;
 use wgpu::LoadOp;
 use wgpu::Operations;
 use wgpu::Origin3d;
@@ -55,6 +54,7 @@ use wgpu::RenderPassColorAttachment;
 use wgpu::RenderPassDescriptor;
 use wgpu::StoreOp;
 use wgpu::TextureAspect;
+use wgpu::{BufferDescriptor, IndexFormat};
 use wgpu::{BufferUsages, Queue};
 use wgpu::{
     CommandEncoderDescriptor, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
@@ -494,11 +494,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         let id = self.wgpu_images.img_id;
         self.wgpu_images.img_id += 1;
 
-        self.wgpu_images.img.insert(id, WgpuImage {
-            texture: img_view,
-            width,
-            height,
-        },
+        self.wgpu_images.img.insert(
+            id,
+            WgpuImage {
+                texture: img_view,
+                width,
+                height,
+            },
         );
 
         id
@@ -656,18 +658,42 @@ fn render(
             text_render_pass.set_pipeline(&pipeline.img_compositor.pipeline);
             text_render_pass.set_bind_group(0, &pipeline.img_compositor.fs_uniforms, &[]);
             text_render_pass.set_vertex_buffer(0, img_vertices.slice(..));
-            for (n, img_id) in vertices.img_render.iter().enumerate() {
+            for (n, img_info) in vertices.img_render.iter().enumerate() {
                 let n = n as u32;
 
-                let img_texture = images.img.get(img_id).expect("image");
+                let img_size_buffer = base.device.create_buffer_init(&BufferInitDescriptor {
+                    label: Some("Image Size Uniforms Buffer"),
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    contents: bytemuck::cast_slice(&[
+                        img_info.img_width as f32,
+                        img_info.img_height as f32,
+                    ]),
+                });
+                let view_size_buffer = base.device.create_buffer_init(&BufferInitDescriptor {
+                    label: Some("View Size Uniforms Buffer"),
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    contents: bytemuck::cast_slice(&[
+                        img_info.width as f32,
+                        img_info.height as f32,
+                    ]),
+                });
+                let img_size_bindings = build_img_size_bindings(
+                    &pipeline.img_compositor,
+                    &base.device,
+                    &img_size_buffer,
+                    &view_size_buffer,
+                );
+                text_render_pass.set_bind_group(1, &img_size_bindings, &[]);
 
+                let img_texture = images.img.get(&img_info.id).expect("image");
                 let img_bindings = build_img_bindings(
                     &pipeline.img_compositor,
                     &base.device,
                     &pipeline.sampler,
                     &img_texture.texture,
                 );
-                text_render_pass.set_bind_group(1, &img_bindings, &[]);
+
+                text_render_pass.set_bind_group(2, &img_bindings, &[]);
 
                 text_render_pass.draw_indexed(n * 6..(n + 1) * 6, 0, 0..1);
             }
@@ -697,7 +723,7 @@ fn render(
 fn draw_tui(
     bounds: ratatui_core::layout::Size,
     fonts: &Fonts,
-    content: &mut dyn Iterator<Item=(u16, u16, &'_ Cell)>,
+    content: &mut dyn Iterator<Item = (u16, u16, &'_ Cell)>,
     tui_surface: &mut TuiSurface,
     rendered: &mut Vec<Rendered>,
 ) {
@@ -1012,19 +1038,12 @@ fn append_rendered_image(
     let y = to_render.y as f32;
     let width = to_render.width as f32;
     let height = to_render.height as f32;
-    let img_width = to_render.img_width as f32;
-    let img_height = to_render.img_height as f32;
     let uvx = 0.0f32;
     let uvy = 0.0f32;
 
-    // let texture_aspect = img_width / img_height;
-    // let screen_aspect = width / height;
-    // let scale = (texture_aspect / screen_aspect).max(1.0); // For "fit" behavior
-    // correctedUV = (UV - 0.5) * vec2 < f32 > (scale) + 0.5;
-
     debug!("append image {} : {} {} + {} {}", id, x, y, width, height);
 
-    vertices.img_render.push(id);
+    vertices.img_render.push(*to_render);
 
     vertices.img_indices.push([
         *index_offset,     // x, y
@@ -1246,7 +1265,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         mut content: I,
     ) -> std::io::Result<()>
     where
-        I: Iterator<Item=(u16, u16, &'a Cell)>,
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
         let bounds = self.size()?;
         draw_tui(
@@ -2260,15 +2279,15 @@ mod tests {
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
-                    .with_dimensions(Dimensions {
-                        width: NonZeroU32::new(512).unwrap(),
-                        height: NonZeroU32::new(72).unwrap(),
-                    })
-                    .build_headless(),
+                .with_dimensions(Dimensions {
+                    width: NonZeroU32::new(512).unwrap(),
+                    height: NonZeroU32::new(72).unwrap(),
+                })
+                .build_headless(),
             )
-                .unwrap(),
+            .unwrap(),
         )
-            .unwrap();
+        .unwrap();
 
         terminal
             .draw(|f: &mut ratatui_core::terminal::Frame| {
@@ -2330,15 +2349,15 @@ mod tests {
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
-                    .with_dimensions(Dimensions {
-                        width: NonZeroU32::new(256).unwrap(),
-                        height: NonZeroU32::new(72).unwrap(),
-                    })
-                    .build_headless(),
+                .with_dimensions(Dimensions {
+                    width: NonZeroU32::new(256).unwrap(),
+                    height: NonZeroU32::new(72).unwrap(),
+                })
+                .build_headless(),
             )
-                .unwrap(),
+            .unwrap(),
         )
-            .unwrap();
+        .unwrap();
 
         terminal
             .draw(|f: &mut ratatui_core::terminal::Frame| {
@@ -2399,15 +2418,15 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                    .with_dimensions(Dimensions {
-                        width: NonZeroU32::new(512).unwrap(),
-                        height: NonZeroU32::new(72).unwrap(),
-                    })
-                    .build_headless(),
+                .with_dimensions(Dimensions {
+                    width: NonZeroU32::new(512).unwrap(),
+                    height: NonZeroU32::new(72).unwrap(),
+                })
+                .build_headless(),
             )
-                .unwrap(),
+            .unwrap(),
         )
-            .unwrap();
+        .unwrap();
 
         terminal
             .draw(|f: &mut ratatui_core::terminal::Frame| {
@@ -2469,15 +2488,15 @@ mod tests {
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
-                    .with_dimensions(Dimensions {
-                        width: NonZeroU32::new(512).unwrap(),
-                        height: NonZeroU32::new(72).unwrap(),
-                    })
-                    .build_headless(),
+                .with_dimensions(Dimensions {
+                    width: NonZeroU32::new(512).unwrap(),
+                    height: NonZeroU32::new(72).unwrap(),
+                })
+                .build_headless(),
             )
-                .unwrap(),
+            .unwrap(),
         )
-            .unwrap();
+        .unwrap();
 
         terminal
             .draw(|f: &mut ratatui_core::terminal::Frame| {
@@ -2542,15 +2561,15 @@ mod tests {
                     Font::new(include_bytes!("fonts/CascadiaMono-Regular.ttf"))
                         .expect("Invalid font file"),
                 )
-                    .with_dimensions(Dimensions {
-                        width: NonZeroU32::new(512).unwrap(),
-                        height: NonZeroU32::new(72).unwrap(),
-                    })
-                    .build_headless(),
+                .with_dimensions(Dimensions {
+                    width: NonZeroU32::new(512).unwrap(),
+                    height: NonZeroU32::new(72).unwrap(),
+                })
+                .build_headless(),
             )
-                .unwrap(),
+            .unwrap(),
         )
-            .unwrap();
+        .unwrap();
 
         terminal
             .draw(|f: &mut ratatui_core::terminal::Frame| {
@@ -2618,15 +2637,15 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                    .with_dimensions(Dimensions {
-                        width: NonZeroU32::new(256).unwrap(),
-                        height: NonZeroU32::new(72).unwrap(),
-                    })
-                    .build_headless(),
+                .with_dimensions(Dimensions {
+                    width: NonZeroU32::new(256).unwrap(),
+                    height: NonZeroU32::new(72).unwrap(),
+                })
+                .build_headless(),
             )
-                .unwrap(),
+            .unwrap(),
         )
-            .unwrap();
+        .unwrap();
 
         terminal
             .draw(|f: &mut ratatui_core::terminal::Frame| {
@@ -2736,15 +2755,15 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                    .with_dimensions(Dimensions {
-                        width: NonZeroU32::new(256).unwrap(),
-                        height: NonZeroU32::new(72).unwrap(),
-                    })
-                    .build_headless(),
+                .with_dimensions(Dimensions {
+                    width: NonZeroU32::new(256).unwrap(),
+                    height: NonZeroU32::new(72).unwrap(),
+                })
+                .build_headless(),
             )
-                .unwrap(),
+            .unwrap(),
         )
-            .unwrap();
+        .unwrap();
 
         terminal
             .draw(|f: &mut ratatui_core::terminal::Frame| {
@@ -2804,17 +2823,17 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                    .with_dimensions(Dimensions {
-                        width: NonZeroU32::new(256).unwrap(),
-                        height: NonZeroU32::new(72).unwrap(),
-                    })
-                    .with_bg_color(Color::Rgb(0x1E, 0x23, 0x26))
-                    .with_fg_color(Color::White)
-                    .build_headless_with_format(TextureFormat::Rgba8Unorm),
+                .with_dimensions(Dimensions {
+                    width: NonZeroU32::new(256).unwrap(),
+                    height: NonZeroU32::new(72).unwrap(),
+                })
+                .with_bg_color(Color::Rgb(0x1E, 0x23, 0x26))
+                .with_fg_color(Color::White)
+                .build_headless_with_format(TextureFormat::Rgba8Unorm),
             )
-                .unwrap(),
+            .unwrap(),
         )
-            .unwrap();
+        .unwrap();
 
         terminal
             .draw(|f: &mut ratatui_core::terminal::Frame| {
@@ -2874,17 +2893,17 @@ mod tests {
                 Builder::<DefaultPostProcessorBuilder>::from_font(
                     Font::new(include_bytes!("fonts/Fairfax.ttf")).expect("Invalid font file"),
                 )
-                    .with_dimensions(Dimensions {
-                        width: NonZeroU32::new(256).unwrap(),
-                        height: NonZeroU32::new(72).unwrap(),
-                    })
-                    .with_bg_color(Color::Rgb(0x1E, 0x23, 0x26))
-                    .with_fg_color(Color::White)
-                    .build_headless_with_format(TextureFormat::Rgba8UnormSrgb),
+                .with_dimensions(Dimensions {
+                    width: NonZeroU32::new(256).unwrap(),
+                    height: NonZeroU32::new(72).unwrap(),
+                })
+                .with_bg_color(Color::Rgb(0x1E, 0x23, 0x26))
+                .with_fg_color(Color::White)
+                .build_headless_with_format(TextureFormat::Rgba8UnormSrgb),
             )
-                .unwrap(),
+            .unwrap(),
         )
-            .unwrap();
+        .unwrap();
 
         terminal
             .draw(|f: &mut ratatui_core::terminal::Frame| {
@@ -2964,14 +2983,14 @@ mod tests {
             }),
             1.0,
         )
-            .expect("Didn't extract png")
-            .1;
+        .expect("Didn't extract png")
+        .1;
 
         for (l, r) in bytemuck::cast_slice::<_, u8>(&extracted)
             .chunks(4)
             .zip(golden.pixels())
         {
-            let [r, g, b, a] = r.2.0;
+            let [r, g, b, a] = r.2 .0;
             assert_eq!(l, [a, b, g, r]);
         }
     }
@@ -3008,8 +3027,8 @@ mod tests {
             }),
             1.0,
         )
-            .expect("Didn't extract bgra")
-            .1;
+        .expect("Didn't extract bgra")
+        .1;
 
         assert_eq!(
             bytemuck::bytes_of(&extracted[0]),
@@ -3044,23 +3063,23 @@ mod tests {
             }),
             1.0,
         )
-            .expect("Didn't extract bmp1")
-            .1;
+        .expect("Didn't extract bmp1")
+        .1;
 
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&extracted),
             bytemuck::cast_slice(&[
                 [
-                    [255u8, 255, 255, 255, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
+                    [255u8, 255, 255, 255,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
                 ],
                 [
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 255, ],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 255,],
                 ],
             ])
         );
@@ -3093,31 +3112,31 @@ mod tests {
             }),
             1.0,
         )
-            .expect("Didn't extract bmp1")
-            .1;
+        .expect("Didn't extract bmp1")
+        .1;
 
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&extracted),
             bytemuck::cast_slice(&[
                 [
-                    [255u8, 255, 255, 255, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 255, ],
+                    [255u8, 255, 255, 255,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 255,],
                 ],
                 [
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 255, ],
-                    [255, 255, 255, 255, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
-                    [255, 255, 255, 0, ],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 255,],
+                    [255, 255, 255, 255,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
+                    [255, 255, 255, 0,],
                 ],
             ])
         );
@@ -3152,27 +3171,27 @@ mod tests {
             }),
             1.0,
         )
-            .expect("Didn't extract bmp2")
-            .1;
+        .expect("Didn't extract bmp2")
+        .1;
 
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&extracted),
             bytemuck::cast_slice(&[
                 [
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b11], ],
-                    [255, 255, 255, LUT_2[0b01], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b00], ],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b11],],
+                    [255, 255, 255, LUT_2[0b01],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b00],],
                 ],
                 [
-                    [255, 255, 255, LUT_2[0b01], ],
-                    [255, 255, 255, LUT_2[0b11], ],
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b00], ],
+                    [255, 255, 255, LUT_2[0b01],],
+                    [255, 255, 255, LUT_2[0b11],],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b00],],
                 ],
             ])
         );
@@ -3209,43 +3228,43 @@ mod tests {
             }),
             1.0,
         )
-            .expect("Didn't extract bmp2")
-            .1;
+        .expect("Didn't extract bmp2")
+        .1;
 
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&extracted),
             bytemuck::cast_slice(&[
                 [
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b11], ],
-                    [255, 255, 255, LUT_2[0b01], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b00], ],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b11],],
+                    [255, 255, 255, LUT_2[0b01],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b00],],
                 ],
                 [
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b01], ],
-                    [255, 255, 255, LUT_2[0b11], ],
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b10], ],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b01],],
+                    [255, 255, 255, LUT_2[0b11],],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b10],],
                 ],
                 [
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b00], ],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b00],],
                 ],
                 [
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b00], ],
-                    [255, 255, 255, LUT_2[0b10], ],
-                    [255, 255, 255, LUT_2[0b00], ],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b00],],
+                    [255, 255, 255, LUT_2[0b10],],
+                    [255, 255, 255, LUT_2[0b00],],
                 ]
             ])
         );
@@ -3278,14 +3297,14 @@ mod tests {
             }),
             1.0,
         )
-            .expect("Didn't extract bmp4")
-            .1;
+        .expect("Didn't extract bmp4")
+        .1;
 
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&extracted),
             bytemuck::cast_slice(&[
-                [[255, 255, 255, LUT_4[0b1010], ], ],
-                [[255, 255, 255, LUT_4[0b0000], ], ],
+                [[255, 255, 255, LUT_4[0b1010],],],
+                [[255, 255, 255, LUT_4[0b0000],],],
             ])
         );
     }
@@ -3317,19 +3336,19 @@ mod tests {
             }),
             1.0,
         )
-            .expect("Didn't extract bmp4")
-            .1;
+        .expect("Didn't extract bmp4")
+        .1;
 
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&extracted),
             bytemuck::cast_slice(&[
                 [
-                    [255, 255, 255, LUT_4[0b1111], ],
-                    [255, 255, 255, LUT_4[0b0001], ],
+                    [255, 255, 255, LUT_4[0b1111],],
+                    [255, 255, 255, LUT_4[0b0001],],
                 ],
                 [
-                    [255, 255, 255, LUT_4[0b0011], ],
-                    [255, 255, 255, LUT_4[0b1100], ],
+                    [255, 255, 255, LUT_4[0b0011],],
+                    [255, 255, 255, LUT_4[0b1100],],
                 ],
             ])
         );

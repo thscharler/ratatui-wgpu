@@ -22,6 +22,7 @@ use wgpu::TextureView;
 use wgpu::TextureViewDescriptor;
 use wgpu::{Adapter, Buffer, Texture};
 use wgpu::{BindGroup, BindGroupLayout, Sampler};
+use crate::backend::wgpu_backend::ImageInfo;
 
 pub trait PostProcessorBuilder {
     /// Resulting postprocessor.
@@ -321,6 +322,7 @@ struct ImgPipeline {
     pipeline: RenderPipeline,
     fs_uniforms: BindGroup,
     fragment_shader_layout: BindGroupLayout,
+    image_shader_layout: BindGroupLayout,
 }
 
 struct TextCacheBgPipeline {
@@ -363,7 +365,7 @@ struct WgpuVertices {
     pub(super) bg_vertices: Vec<TextBgVertexMember>,
     pub(super) text_vertices: Vec<TextVertexMember>,
 
-    pub(super) img_render: Vec<usize>,
+    pub(super) img_render: Vec<ImageInfo>,
     pub(super) img_indices: Vec<[u32; 6]>,
     pub(super) img_vertices: Vec<ImgVertexMember>,
 }
