@@ -39,6 +39,7 @@ use std::cmp::max;
 use std::mem;
 use std::mem::size_of;
 use std::num::NonZeroU64;
+use std::sync::{Arc, Mutex};
 use unicode_bidi::Level;
 use unicode_bidi::ParagraphBidiInfo;
 use unicode_properties::UnicodeEmoji;
@@ -100,6 +101,9 @@ pub(super) struct ImageInfo {
 type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 
 pub(crate) struct TuiSurface {
+    pub(super) image_buffer: ImageBuffer,
+
+    pub(super) images: Vec<(usize, ratatui_core::layout::Rect)>,
     pub(super) cells: Vec<Cell>,
     pub(super) cell_font: Vec<u64>,
     pub(super) cell_remap: Vec<u16>,
@@ -126,6 +130,26 @@ pub(crate) struct TuiSurface {
     pub(super) colors: ColorTable,
     pub(super) reset_fg: Rgb,
     pub(super) reset_bg: Rgb,
+}
+
+///
+/// An image-buffer that can be used in parallel to rendering the TUI.
+///
+#[derive(Debug, Default, Clone)]
+pub struct ImageBuffer {
+    pub(super) images: Arc<Mutex<Vec<(usize, ratatui_core::layout::Rect)>>>,
+}
+
+impl ImageBuffer {
+    /// Render an image
+    pub fn render_image(
+        &self,
+        id: usize,
+        area: ratatui_core::layout::Rect,
+    ) {
+        let mut images = self.images.lock().expect("lock");
+        images.push((id, area));
+    }
 }
 
 /// A ratatui backend leveraging wgpu for rendering.
@@ -165,6 +189,10 @@ pub struct WgpuBackend<'f, 's> {
 }
 
 impl<'f, 's> WgpuBackend<'f, 's> {
+    pub fn image_buffer(&self) -> ImageBuffer {
+        self.tui_surface.image_buffer.clone()
+    }
+
     pub fn set_bg_color(
         &mut self,
         color: ratatui_core::style::Color,
@@ -415,28 +443,6 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         );
 
         self.wgpu_vertices.clear();
-    }
-
-    /// Render an image
-    pub fn render_image(
-        &mut self,
-        id: usize,
-        area: ratatui_core::layout::Rect,
-    ) {
-        let font_box = self.fonts.font_box();
-        let img = self.wgpu_images.img.get(&id).expect("image");
-
-        self.tui_surface.dirty_img.push(ImageInfo {
-            id,
-            x: (area.x as u32) * font_box.width,
-            y: (area.y as u32) * font_box.height,
-            width: (area.width as u32) * font_box.width,
-            height: (area.height as u32) * font_box.height,
-            img_width: img.width,
-            img_height: img.height,
-        });
-
-        debug!("render_image {:?}", self.tui_surface.dirty_img);
     }
 
     /// Remove an image.
@@ -723,6 +729,7 @@ fn render(
 fn draw_tui(
     bounds: ratatui_core::layout::Size,
     fonts: &Fonts,
+    wgpu_images: &WgpuImages,
     content: &mut dyn Iterator<Item = (u16, u16, &'_ Cell)>,
     tui_surface: &mut TuiSurface,
     rendered: &mut Vec<Rendered>,
@@ -746,6 +753,42 @@ fn draw_tui(
     tui_surface
         .dirty_cells
         .resize(bounds.height as usize * bounds.width as usize, true);
+
+    // render images from buffer
+    let mut new_images = Vec::new();
+    let mut images = tui_surface.image_buffer.images.lock().expect("lock");
+    let font_box = fonts.font_box();
+    for (img_id, area) in images.iter() {
+        new_images.push((*img_id, *area));
+        tui_surface
+            .images
+            .retain(|(test_img_id, test_area)| !(test_img_id == img_id && test_area == area));
+
+        let img = wgpu_images.img.get(img_id).expect("image");
+        tui_surface.dirty_img.push(ImageInfo {
+            id: *img_id,
+            x: (area.x as u32) * font_box.width,
+            y: (area.y as u32) * font_box.height,
+            width: (area.width as u32) * font_box.width,
+            height: (area.height as u32) * font_box.height,
+            img_width: img.width,
+            img_height: img.height,
+        });
+    }
+    // clear buffer
+    images.clear();
+    // render areas for old images
+    for (_, area) in &tui_surface.images {
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                tui_surface
+                    .dirty_cells
+                    .set((y * bounds.width + x) as usize, true);
+            }
+            tui_surface.dirty_rows.set(y as usize, true);
+        }
+    }
+    tui_surface.images = new_images;
 
     rendered.resize_with(
         bounds.height as usize * bounds.width as usize,
@@ -1271,6 +1314,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         draw_tui(
             bounds,
             &self.fonts,
+            &self.wgpu_images,
             &mut content,
             &mut self.tui_surface,
             &mut self.rendered,

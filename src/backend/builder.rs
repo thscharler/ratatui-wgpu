@@ -1,4 +1,4 @@
-use crate::backend::wgpu_backend::{TuiSurface, WgpuBackend};
+use crate::backend::wgpu_backend::{ImageBuffer, TuiSurface, WgpuBackend};
 use crate::backend::{build_wgpu_state, PostProcessorBuilder, WgpuImages};
 use crate::backend::{Dimensions, RenderSurface};
 use crate::backend::{ImgPipeline, TextCacheFgPipeline};
@@ -620,6 +620,10 @@ where
         Ok(WgpuBackend {
             fonts: self.fonts,
             tui_surface: TuiSurface {
+                image_buffer: ImageBuffer {
+                    images: Default::default(),
+                },
+                images: vec![],
                 cells: vec![],
                 cell_font: vec![],
                 cell_remap: vec![],

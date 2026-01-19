@@ -227,6 +227,7 @@ impl BitAnd for Blinking {
 
 pub use backend::builder::Builder;
 pub use backend::builder::DefaultBuilder;
+pub use backend::wgpu_backend::ImageBuffer;
 pub use backend::wgpu_backend::WgpuBackend;
 pub use backend::Dimensions;
 pub use backend::PostProcessor;
