@@ -531,6 +531,7 @@ fn rebuild_surface(
     let chars_wide = width / font_box.width;
     let chars_high = height / font_box.height;
 
+    tui_surface.images.clear();
     tui_surface.cells.clear();
     tui_surface.cell_font.clear();
     tui_surface.cell_remap.clear();
@@ -541,6 +542,7 @@ fn rebuild_surface(
     // the resize is less than a character dimension.
     tui_surface.dirty_rows.clear();
     tui_surface.dirty_cells.clear();
+    tui_surface.dirty_img.clear();
 
     rendered.clear();
 
@@ -755,9 +757,11 @@ fn draw_tui(
         .resize(bounds.height as usize * bounds.width as usize, true);
 
     // render images from buffer
+    tui_surface.dirty_img.clear();
+
+    let font_box = fonts.font_box();
     let mut new_images = Vec::new();
     let mut images = tui_surface.image_buffer.images.lock().expect("lock");
-    let font_box = fonts.font_box();
     for (img_id, area) in images.iter() {
         new_images.push((*img_id, *area));
         tui_surface
