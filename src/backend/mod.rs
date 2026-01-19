@@ -1,11 +1,11 @@
 pub(crate) mod builder;
 pub(crate) mod wgpu_backend;
 
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 
 use crate::fonts::FontBox;
 use crate::utils::text_atlas::Atlas;
-use wgpu::BindGroup;
 use wgpu::CommandEncoder;
 use wgpu::Device;
 use wgpu::Extent3d;
@@ -21,6 +21,7 @@ use wgpu::TextureUsages;
 use wgpu::TextureView;
 use wgpu::TextureViewDescriptor;
 use wgpu::{Adapter, Buffer, Texture};
+use wgpu::{BindGroup, BindGroupLayout, Sampler};
 
 pub trait PostProcessorBuilder {
     /// Resulting postprocessor.
@@ -309,6 +310,19 @@ struct TextVertexMember {
     cursor_color: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct ImgVertexMember {
+    vertex: [f32; 2],
+    uv: [f32; 2],
+}
+
+struct ImgPipeline {
+    pipeline: RenderPipeline,
+    fs_uniforms: BindGroup,
+    fragment_shader_layout: BindGroupLayout,
+}
+
 struct TextCacheBgPipeline {
     pipeline: RenderPipeline,
     fs_uniforms: BindGroup,
@@ -333,27 +347,50 @@ struct WgpuAtlas {
     text_cache: Texture,
 }
 
+struct WgpuImage {
+    texture: TextureView,
+    width: u32,
+    height: u32,
+}
+
+struct WgpuImages {
+    pub(super) img_id: usize,
+    pub(super) img: HashMap<usize, WgpuImage>,
+}
+
 struct WgpuVertices {
-    pub(super) bg_vertices: Vec<TextBgVertexMember>,
     pub(super) text_indices: Vec<[u32; 6]>,
+    pub(super) bg_vertices: Vec<TextBgVertexMember>,
     pub(super) text_vertices: Vec<TextVertexMember>,
+
+    pub(super) img_render: Vec<usize>,
+    pub(super) img_indices: Vec<[u32; 6]>,
+    pub(super) img_vertices: Vec<ImgVertexMember>,
 }
 
 struct WgpuPipeline {
+    sampler: Sampler,
+
     text_screen_size_buffer: Buffer,
+
     text_bg_compositor: TextCacheBgPipeline,
     text_fg_compositor: TextCacheFgPipeline,
+
+    img_compositor: ImgPipeline,
 }
 
 impl WgpuVertices {
     pub fn is_empty(&self) -> bool {
-        self.bg_vertices.is_empty() && self.text_vertices.is_empty()
+        self.bg_vertices.is_empty() && self.text_vertices.is_empty() && self.img_vertices.is_empty()
     }
 
     pub fn clear(&mut self) {
         self.text_indices.clear();
         self.bg_vertices.clear();
         self.text_vertices.clear();
+        self.img_vertices.clear();
+        self.img_indices.clear();
+        self.img_render.clear();
     }
 }
 
