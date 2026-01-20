@@ -18,6 +18,7 @@ use ratatui_core::style::Color;
 use rustybuzz::UnicodeBuffer;
 use std::num::NonZeroU32;
 use std::num::NonZeroU64;
+use std::sync::{Arc, Mutex};
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 use wgpu::AddressMode;
@@ -621,6 +622,8 @@ where
             fonts: self.fonts,
             tui_surface: TuiSurface {
                 image_buffer: ImageBuffer {
+                    font_box: Arc::new(Mutex::new(font_box)),
+                    image_size: Arc::new(Mutex::new(Default::default())),
                     images: Default::default(),
                 },
                 images: vec![],
@@ -675,7 +678,7 @@ where
                 text_cache,
             },
             wgpu_images: WgpuImages {
-                img_id: 0,
+                img_id: 1,
                 img: Default::default(),
             },
             wgpu_post_process: Box::new(post_process),
@@ -695,6 +698,7 @@ pub(super) fn build_img_size_bindings(
     device: &Device,
     img_size: &Buffer,
     view_size: &Buffer,
+    uv_transform: &Buffer,
 ) -> BindGroup {
     device.create_bind_group(&BindGroupDescriptor {
         label: Some("Img Size Binding"),
@@ -707,6 +711,10 @@ pub(super) fn build_img_size_bindings(
             BindGroupEntry {
                 binding: 1,
                 resource: view_size.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: uv_transform.as_entire_binding(),
             },
         ],
     })
@@ -774,6 +782,16 @@ fn build_img_compositor(
                     ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: Some(NonZeroU64::new(size_of::<[f32; 2]>() as u64).unwrap()),
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 2,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(size_of::<[[f32; 4]; 2]>() as u64).unwrap()),
                 },
                 count: None,
             },

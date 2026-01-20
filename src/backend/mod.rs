@@ -3,7 +3,8 @@ pub(crate) mod wgpu_backend;
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use crate::fonts::FontBox;
 use crate::utils::text_atlas::Atlas;
 use wgpu::CommandEncoder;
@@ -353,6 +354,7 @@ struct WgpuImage {
     texture: TextureView,
     width: u32,
     height: u32,
+    dropped: Arc<AtomicBool>,
 }
 
 struct WgpuImages {

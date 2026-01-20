@@ -35,10 +35,11 @@ use rustybuzz::ttf_parser::RgbaColor;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::GlyphBuffer;
 use rustybuzz::UnicodeBuffer;
-use std::cmp::max;
+use std::collections::HashMap;
 use std::mem;
 use std::mem::size_of;
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use unicode_bidi::Level;
 use unicode_bidi::ParagraphBidiInfo;
@@ -48,6 +49,7 @@ use unicode_properties::{GeneralCategory, GeneralCategoryGroup};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
+use wgpu::IndexFormat;
 use wgpu::LoadOp;
 use wgpu::Operations;
 use wgpu::Origin3d;
@@ -55,7 +57,6 @@ use wgpu::RenderPassColorAttachment;
 use wgpu::RenderPassDescriptor;
 use wgpu::StoreOp;
 use wgpu::TextureAspect;
-use wgpu::{BufferDescriptor, IndexFormat};
 use wgpu::{BufferUsages, Queue};
 use wgpu::{
     CommandEncoderDescriptor, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
@@ -87,10 +88,14 @@ pub(super) struct RenderInfo {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ImageInfo {
     id: usize,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
+
+    view_x: u32,
+    view_y: u32,
+    view_width: u32,
+    view_height: u32,
+
+    uv_transform: Transform,
+
     img_width: u32,
     img_height: u32,
 }
@@ -137,18 +142,117 @@ pub(crate) struct TuiSurface {
 ///
 #[derive(Debug, Default, Clone)]
 pub struct ImageBuffer {
-    pub(super) images: Arc<Mutex<Vec<(usize, ratatui_core::layout::Rect)>>>,
+    pub(super) font_box: Arc<Mutex<FontBox>>,
+    pub(super) image_size: Arc<Mutex<HashMap<usize, (u32, u32)>>>,
+    pub(super) images: Arc<Mutex<Vec<(usize, ratatui_core::layout::Rect, raqote::Transform)>>>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ImageHandle {
+    id: usize,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Drop for ImageHandle {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Release)
+    }
 }
 
 impl ImageBuffer {
+    /// The FontBox.
+    pub fn font_box(&self) -> FontBox {
+        *self.font_box.lock().expect("lock")
+    }
+
+    /// Get the image-size in px.
+    pub fn image_size(
+        &self,
+        id: &ImageHandle,
+    ) -> Option<(u32, u32)> {
+        self.image_size.lock().expect("lock").get(&id.id).cloned()
+    }
+
     /// Render an image
     pub fn render_image(
         &self,
-        id: usize,
+        id: &ImageHandle,
         area: ratatui_core::layout::Rect,
     ) {
         let mut images = self.images.lock().expect("lock");
-        images.push((id, area));
+        images.push((id.id, area, Transform::default()));
+    }
+
+    /// Render an image with a Transform. This transform will
+    /// be applied to the UV
+    pub fn render_image_tr(
+        &self,
+        id: &ImageHandle,
+        area: ratatui_core::layout::Rect,
+        uv_transform: raqote::Transform,
+    ) {
+        let mut images = self.images.lock().expect("lock");
+        images.push((id.id, area, uv_transform));
+    }
+
+    /// Scale the image for the best fit in the given area.
+    pub fn scale_to_fit(
+        &self,
+        img_width: u32,
+        img_height: u32,
+        rect: ratatui_core::layout::Rect,
+    ) -> Transform {
+        let font_box = self.font_box();
+
+        let (view_width, view_height) = font_box.px_size(rect.width, rect.height);
+        let (view_width, view_height) = (view_width as f32, view_height as f32);
+        let (img_width, img_height) = (img_width as f32, img_height as f32);
+
+        if view_width * img_height / view_height > img_width {
+            let w_scale = (view_width * img_height) / (view_height * img_width);
+            let h_scale = 1.0f32;
+            Transform::scale(w_scale, h_scale)
+        } else {
+            let w_scale = 1.0f32;
+            let h_scale = (view_height * img_width) / (view_width * img_height);
+            Transform::scale(w_scale, h_scale)
+        }
+    }
+
+    /// Scale the image for the best fit in the given area.
+    pub fn scale_to_fill_horizontal(
+        &self,
+        img_width: u32,
+        img_height: u32,
+        rect: ratatui_core::layout::Rect,
+    ) -> Transform {
+        let font_box = self.font_box();
+
+        let (view_width, view_height) = font_box.px_size(rect.width, rect.height);
+        let (view_width, view_height) = (view_width as f32, view_height as f32);
+        let (img_width, img_height) = (img_width as f32, img_height as f32);
+
+        let w_scale = 1.0f32;
+        let h_scale = (view_height * img_width) / (view_width * img_height);
+        Transform::scale(w_scale, h_scale)
+    }
+
+    /// Scale the image for the best fit in the given area.
+    pub fn scale_to_fill_vertical(
+        &self,
+        img_width: u32,
+        img_height: u32,
+        rect: ratatui_core::layout::Rect,
+    ) -> Transform {
+        let font_box = self.font_box();
+
+        let (view_width, view_height) = font_box.px_size(rect.width, rect.height);
+        let (view_width, view_height) = (view_width as f32, view_height as f32);
+        let (img_width, img_height) = (img_width as f32, img_height as f32);
+
+        let w_scale = (view_width * img_height) / (view_height * img_width);
+        let h_scale = 1.0f32;
+        Transform::scale(w_scale, h_scale)
     }
 }
 
@@ -358,6 +462,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.wgpu_atlas
             .cached
             .update_font_box(self.fonts.font_box());
+        *self.tui_surface.image_buffer.font_box.lock().expect("lock") = self.fonts.font_box();
 
         rebuild_surface(
             self.fonts.font_box(),
@@ -384,6 +489,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.wgpu_atlas
             .cached
             .update_font_box(self.fonts.font_box());
+        *self.tui_surface.image_buffer.font_box.lock().expect("lock") = self.fonts.font_box();
 
         rebuild_surface(
             self.fonts.font_box(),
@@ -406,6 +512,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.wgpu_atlas
             .cached
             .update_font_box(self.fonts.font_box());
+        *self.tui_surface.image_buffer.font_box.lock().expect("lock") = self.fonts.font_box();
 
         rebuild_surface(
             self.fonts.font_box(),
@@ -445,21 +552,13 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.wgpu_vertices.clear();
     }
 
-    /// Remove an image.
-    pub fn remove_image(
-        &mut self,
-        id: usize,
-    ) {
-        self.wgpu_images.img.remove(&id);
-    }
-
     /// Add an image as raw RGBA data.
     pub fn add_image(
         &mut self,
         image: &[u8],
         width: u32,
         height: u32,
-    ) -> usize {
+    ) -> ImageHandle {
         let img = self.wgpu_base.device.create_texture(&TextureDescriptor {
             label: Some("Img"),
             size: Extent3d {
@@ -500,16 +599,27 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         let id = self.wgpu_images.img_id;
         self.wgpu_images.img_id += 1;
 
+        let dropped = Arc::new(AtomicBool::new(false));
+
         self.wgpu_images.img.insert(
             id,
             WgpuImage {
                 texture: img_view,
                 width,
                 height,
+                dropped: dropped.clone(),
             },
         );
 
-        id
+        let mut image_size = self
+            .tui_surface
+            .image_buffer
+            .image_size
+            .lock()
+            .expect("lock");
+        image_size.insert(id, (width, height));
+
+        ImageHandle { id, dropped }
     }
 }
 
@@ -557,6 +667,23 @@ fn rebuild_surface(
         &wgpu_base.text_dest_view,
         &wgpu_base.surface_config,
     );
+}
+
+fn drop_images(
+    tui_surface: &mut TuiSurface,
+    wgpu_images: &mut WgpuImages,
+) {
+    let mut dropped = Vec::new();
+    for (img_id, img) in &wgpu_images.img {
+        if img.dropped.load(Ordering::Acquire) {
+            dropped.push(*img_id);
+        }
+    }
+    let mut image_size = tui_surface.image_buffer.image_size.lock().expect("lock");
+    for img_id in dropped {
+        wgpu_images.img.remove(&img_id);
+        image_size.remove(&img_id);
+    }
 }
 
 fn render(
@@ -681,15 +808,31 @@ fn render(
                     label: Some("View Size Uniforms Buffer"),
                     usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                     contents: bytemuck::cast_slice(&[
-                        img_info.width as f32,
-                        img_info.height as f32,
+                        img_info.view_width as f32,
+                        img_info.view_height as f32,
                     ]),
                 });
+                let uv_transform_buffer = base.device.create_buffer_init(&BufferInitDescriptor {
+                    label: Some("Image UV-Transform Uniforms Buffer"),
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    contents: bytemuck::cast_slice(&[[
+                        img_info.uv_transform.m11,
+                        img_info.uv_transform.m21,
+                        img_info.uv_transform.m31,
+                        0.0f32, // padding
+                        img_info.uv_transform.m12,
+                        img_info.uv_transform.m22,
+                        img_info.uv_transform.m32,
+                        0.0f32, // padding
+                    ]]),
+                });
+
                 let img_size_bindings = build_img_size_bindings(
                     &pipeline.img_compositor,
                     &base.device,
                     &img_size_buffer,
                     &view_size_buffer,
+                    &uv_transform_buffer,
                 );
                 text_render_pass.set_bind_group(1, &img_size_bindings, &[]);
 
@@ -756,13 +899,10 @@ fn draw_tui(
         .dirty_cells
         .resize(bounds.height as usize * bounds.width as usize, true);
 
-    // render images from buffer
-    tui_surface.dirty_img.clear();
-
     let font_box = fonts.font_box();
     let mut new_images = Vec::new();
     let mut images = tui_surface.image_buffer.images.lock().expect("lock");
-    for (img_id, area) in images.iter() {
+    for (img_id, area, transform) in images.iter() {
         new_images.push((*img_id, *area));
         tui_surface
             .images
@@ -771,10 +911,11 @@ fn draw_tui(
         let img = wgpu_images.img.get(img_id).expect("image");
         tui_surface.dirty_img.push(ImageInfo {
             id: *img_id,
-            x: (area.x as u32) * font_box.width,
-            y: (area.y as u32) * font_box.height,
-            width: (area.width as u32) * font_box.width,
-            height: (area.height as u32) * font_box.height,
+            view_x: (area.x as u32) * font_box.width,
+            view_y: (area.y as u32) * font_box.height,
+            view_width: (area.width as u32) * font_box.width,
+            view_height: (area.height as u32) * font_box.height,
+            uv_transform: *transform,
             img_width: img.width,
             img_height: img.height,
         });
@@ -1059,8 +1200,8 @@ fn append_dirty_rows(
         }
 
         let mut index_offset = 0;
-        for img_idx in tui_surface.dirty_img.iter() {
-            append_rendered_image(img_idx, &mut index_offset, wgpu_vertices);
+        for img_info in tui_surface.dirty_img.iter() {
+            append_rendered_image(img_info, &mut index_offset, wgpu_vertices);
         }
 
         tui_surface
@@ -1071,7 +1212,7 @@ fn append_dirty_rows(
             .dirty_cells
             .iter_mut()
             .for_each(|mut v| *v = false);
-        // tui_surface.dirty_img.clear();
+        tui_surface.dirty_img.clear();
     }
 }
 
@@ -1081,10 +1222,10 @@ fn append_rendered_image(
     vertices: &mut WgpuVertices,
 ) {
     let id = to_render.id;
-    let x = to_render.x as f32;
-    let y = to_render.y as f32;
-    let width = to_render.width as f32;
-    let height = to_render.height as f32;
+    let x = to_render.view_x as f32;
+    let y = to_render.view_y as f32;
+    let width = to_render.view_width as f32;
+    let height = to_render.view_height as f32;
     let uvx = 0.0f32;
     let uvy = 0.0f32;
 
@@ -1448,6 +1589,7 @@ impl<'s> Backend for WgpuBackend<'_, 's> {
         );
 
         self.wgpu_vertices.clear();
+        drop_images(&mut self.tui_surface, &mut self.wgpu_images);
 
         Ok(())
     }
