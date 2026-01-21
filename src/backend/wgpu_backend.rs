@@ -901,6 +901,7 @@ fn draw_tui(
 
     let font_box = fonts.font_box();
     let mut new_images = Vec::new();
+
     let mut images = tui_surface.image_buffer.images.lock().expect("lock");
     for (img_id, area, transform) in images.iter() {
         new_images.push((*img_id, *area));
@@ -920,10 +921,11 @@ fn draw_tui(
             img_height: img.height,
         });
     }
-    // clear buffer
+    // clear communication buffer
     images.clear();
-    // render areas for old images
-    for (_, area) in &tui_surface.images {
+
+    // render areas for old&new images
+    for (_, area) in tui_surface.images.iter().chain(new_images.iter()) {
         for y in area.y..area.y + area.height {
             for x in area.x..area.x + area.width {
                 tui_surface
@@ -1185,8 +1187,6 @@ fn append_dirty_rows(
     rendered: &Vec<Rendered>,
     wgpu_vertices: &mut WgpuVertices,
 ) {
-    debug!("append_dirty_rows {:?}", tui_surface.dirty_img);
-
     if wgpu_post_process.needs_update()
         || tui_surface.dirty_rows.any()
         || !tui_surface.dirty_img.is_empty()
@@ -1228,8 +1228,6 @@ fn append_rendered_image(
     let height = to_render.view_height as f32;
     let uvx = 0.0f32;
     let uvy = 0.0f32;
-
-    debug!("append image {} : {} {} + {} {}", id, x, y, width, height);
 
     vertices.img_render.push(*to_render);
 
