@@ -16,7 +16,6 @@ use crate::Result;
 use crate::{CursorStyle, Error};
 use ratatui_core::style::Color;
 use rustybuzz::UnicodeBuffer;
-use std::num::NonZeroU32;
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 use wgpu::util::BufferInitDescriptor;

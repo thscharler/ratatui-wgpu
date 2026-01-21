@@ -1,6 +1,7 @@
 pub(crate) mod builder;
 pub(crate) mod wgpu_backend;
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -41,7 +42,7 @@ pub trait PostProcessorBuilder {
 }
 
 /// A pipeline for post-processing rendered text.
-pub trait PostProcessor {
+pub trait PostProcessor : Any {
     /// Map the screen-coordinates to cell-coordinates.
     fn map_to_cell(
         &self,

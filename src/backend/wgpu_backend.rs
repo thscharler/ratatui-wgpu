@@ -49,18 +49,18 @@ use unicode_properties::{GeneralCategory, GeneralCategoryGroup};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
-use wgpu::IndexFormat;
-use wgpu::LoadOp;
 use wgpu::Operations;
 use wgpu::Origin3d;
 use wgpu::RenderPassColorAttachment;
 use wgpu::RenderPassDescriptor;
 use wgpu::StoreOp;
 use wgpu::TextureAspect;
+use wgpu::{Buffer, IndexFormat, RenderPass};
 use wgpu::{BufferUsages, Queue};
 use wgpu::{
     CommandEncoderDescriptor, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
 };
+use wgpu::{Device, LoadOp};
 use wgpu::{Extent3d, TextureViewDescriptor};
 
 const NULL_CELL: Cell = {
@@ -106,34 +106,64 @@ pub(super) struct ImageInfo {
 type Rendered = IndexMap<(i32, i32, GlyphId), RenderInfo, RandomState>;
 
 pub(crate) struct TuiSurface {
+    // communication with the application. can run in parallel
+    // with ratatui's draw() function.
     pub(super) image_buffer: ImageBuffer,
 
-    pub(super) images: Vec<(usize, ratatui_core::layout::Rect)>,
+    // current images
+    pub(super) images: Vec<ImageInfo>,
+    // cell data
     pub(super) cells: Vec<Cell>,
+    // font detection
     pub(super) cell_font: Vec<u64>,
+    // bidi can reorder cells in a row.
+    // points to the cell with the actual cell-data.
     pub(super) cell_remap: Vec<u16>,
+    // rows marked as dirty for redraw.
     pub(super) dirty_rows: BitVec,
+    // exact cells marked as dirty. only these will be rendered.
     pub(super) dirty_cells: BitVec,
+    // images prepared to render.
     pub(super) dirty_img: Vec<ImageInfo>,
+    // blink flag for each cell
     pub(super) fast_blinking: BitVec,
+    // blink flag for each cell
     pub(super) slow_blinking: BitVec,
 
+    // screen cursor
     pub(super) cursor: (u16, u16),
     pub(super) cursor_color: ratatui_core::style::Color,
     pub(super) cursor_style: CursorStyle,
+    // cursor status set by the application.
     pub(super) cursor_visible: bool,
+    // every time blink() is called this value is increased by 1.
+    // if cursor_blink is divisible by cursor_divisor the actual
+    // cursor_showing state is switched.
+    //
+    // this allows to use a single blink for all blinking effects.
+    //
+    // the cursor is separate, as it will reset to showing+cursor_blink=0
+    // when the cursor position changes.
     pub(super) cursor_blink: u8,
     pub(super) cursor_divisor: u8,
+    // cursor is showing due to the blink rate. combines with cursor_visible
+    // for actual rendering.
     pub(super) cursor_showing: bool,
 
+    // This is increased every time blink() is called. Fast/Slow blinking
+    // use a different divisor of this base rate to switch their
+    // showing state.
     pub(super) blink: u8,
     pub(super) fast_blink_divisor: u8,
     pub(super) fast_blink_showing: bool,
     pub(super) slow_blink_divisor: u8,
     pub(super) slow_blink_showing: bool,
 
+    // Color map for the base16 colors.
     pub(super) colors: ColorTable,
+    // FG-Color for Color::Reset
     pub(super) reset_fg: Rgb,
+    // BG-Color for Color::Reset
     pub(super) reset_bg: Rgb,
 }
 
@@ -142,11 +172,22 @@ pub(crate) struct TuiSurface {
 ///
 #[derive(Debug, Default, Clone)]
 pub struct ImageBuffer {
+    // cell-size. this is updated whenever the font-size or font is changed.
     pub(super) font_box: Arc<Mutex<FontBox>>,
+    // information for all available images.
     pub(super) image_size: Arc<Mutex<HashMap<usize, (u32, u32)>>>,
-    pub(super) images: Arc<Mutex<Vec<(usize, ratatui_core::layout::Rect, raqote::Transform)>>>,
+    // actual render-queue. this will be read when flush() is called and
+    // renders the images.
+    // - image-id
+    // - target rect (x,y,w,h)
+    // - transform to access the image-texture
+    pub(super) images: Arc<Mutex<Vec<(usize, (u32, u32, u32, u32), ImageZ, Transform)>>>,
 }
 
+/// Handle for any added image.
+///
+/// When the handle is dropped, the backing texture will be dropped after
+/// the next flush().
 #[derive(Debug, Default, Clone)]
 pub struct ImageHandle {
     id: usize,
@@ -160,12 +201,12 @@ impl Drop for ImageHandle {
 }
 
 impl ImageBuffer {
-    /// The FontBox.
+    /// Get the active FontBox
     pub fn font_box(&self) -> FontBox {
         *self.font_box.lock().expect("lock")
     }
 
-    /// Get the image-size in px.
+    /// Get the image-size in px for an added image.
     pub fn image_size(
         &self,
         id: &ImageHandle,
@@ -183,8 +224,12 @@ impl ImageBuffer {
         images.push((id.id, area, Transform::default()));
     }
 
-    /// Render an image with a Transform. This transform will
-    /// be applied to the UV
+    /// Render an image with a Transform.
+    ///
+    /// This transform will be applied to the UV vector to access the texture.
+    ///
+    /// To get an ImageHandle add the image first with [add_image]. Add image
+    /// will create the texture for the image.
     pub fn render_image_tr(
         &self,
         id: &ImageHandle,
@@ -269,6 +314,7 @@ impl ImageBuffer {
 /// - No builtin accessibilty, although [`WgpuBackend::get_text`] is provided to
 ///   access the screen's contents.
 pub struct WgpuBackend<'f, 's> {
+    // active fonts
     pub(super) fonts: Fonts<'f>,
 
     // ratatui state
@@ -293,10 +339,18 @@ pub struct WgpuBackend<'f, 's> {
 }
 
 impl<'f, 's> WgpuBackend<'f, 's> {
+    /// Returns the ImageBuffer.
+    ///
+    /// This will be used by the application to queue images for rendering.
+    /// Add the image with [add_image] first, and use the ImageBuffer when
+    /// rendering the UI.
     pub fn image_buffer(&self) -> ImageBuffer {
         self.tui_surface.image_buffer.clone()
     }
 
+    /// Background color or Color::Reset.
+    ///
+    /// This will also fill the unclaimed area at the right/bottom.
     pub fn set_bg_color(
         &mut self,
         color: ratatui_core::style::Color,
@@ -304,6 +358,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.tui_surface.reset_bg = self.tui_surface.colors.c2c(color, [0; 3]);
     }
 
+    /// Foreground color for Color::Reset.
     pub fn set_fg_color(
         &mut self,
         color: ratatui_core::style::Color,
@@ -311,7 +366,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.tui_surface.reset_fg = self.tui_surface.colors.c2c(color, [255; 3]);
     }
 
-    /// Set the cursor style
+    /// Set the cursor style.
     pub fn set_cursor_style(
         &mut self,
         style: CursorStyle,
@@ -391,8 +446,9 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         self.wgpu_post_process = Box::new(post_process);
     }
 
-    /// Resize the rendering surface. This should be called e.g. to keep the
-    /// backend in sync with your window size.
+    /// Resize the rendering surface.
+    ///
+    /// This must be called to keep the backend in sync with your window size.
     pub fn resize(
         &mut self,
         width: u32,
@@ -451,7 +507,11 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     }
 
     /// Update the fonts used for rendering. This will cause a full repaint of
-    /// the screen the next time [`WgpuBackend::flush`] is called.
+    /// the screen the next time [`WgpuBackend::flush`] is called. A call to
+    /// [ratatui_core::terminal::Terminal::draw] will do this.
+    ///
+    /// This will also change the number of cells if the font has a different
+    /// aspect ratio for its glyphs.
     pub fn update_fonts(
         &mut self,
         new_fonts: Fonts<'f>,
@@ -478,6 +538,7 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     ///
     /// This will cause a full repaint of the screen the next
     /// time [`WgpuBackend::flush`] is called.
+    /// A call to [ratatui_core::terminal::Terminal::draw] will do this.
     pub fn update_font_vec(
         &mut self,
         new_fonts: Vec<Font<'f>>,
@@ -500,8 +561,11 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         );
     }
 
-    /// Update the font-size used for rendering. This will cause a full repaint of
+    /// Update the font-size used for rendering.
+    ///
+    /// This will cause a full repaint of
     /// the screen the next time [`WgpuBackend::flush`] is called.
+    /// A call to [ratatui_core::terminal::Terminal::draw] will do this.
     pub fn update_font_size(
         &mut self,
         new_font_size: u32,
@@ -523,7 +587,16 @@ impl<'f, 's> WgpuBackend<'f, 's> {
         );
     }
 
-    /// Toggle blink.
+    /// Toggle blinking.
+    ///
+    /// This will increase the internal blink-counter and render all
+    /// cells marked as 'blink'. It will also make the cursor blink.
+    ///
+    /// The timing for calling blink is up to the application.
+    /// This will give the base-rate for all blink effects. The
+    /// actually rate is determined by the divisor for each effect.
+    /// You can set the divisors when creating the backend with the
+    /// [Builder](crate::Builder).
     pub fn blink(
         &mut self,
         blinking: Blinking,
@@ -553,6 +626,11 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     }
 
     /// Add an image as raw RGBA data.
+    ///
+    /// This will return an ImageHandle.
+    ///
+    /// Freeing the image-texture occurs when you drop the last clone of
+    /// the ImageHandle. The texture will be dropped after the next render.
     pub fn add_image(
         &mut self,
         image: &[u8],
@@ -623,8 +701,8 @@ impl<'f, 's> WgpuBackend<'f, 's> {
     }
 }
 
-/// Resize the rendering surface. This should be called e.g. to keep the
-/// backend in sync with your window size.
+// Resize the rendering surface. This should be called e.g. to keep the
+// backend in sync with your window size.
 fn rebuild_surface(
     font_box: FontBox,
     tui_surface: &mut TuiSurface,
@@ -669,6 +747,7 @@ fn rebuild_surface(
     );
 }
 
+// Remove unreferenced images.
 fn drop_images(
     tui_surface: &mut TuiSurface,
     wgpu_images: &mut WgpuImages,
@@ -686,6 +765,7 @@ fn drop_images(
     }
 }
 
+// run the render pipelines.
 fn render(
     bounds: WindowSize,
     font_box: FontBox,
