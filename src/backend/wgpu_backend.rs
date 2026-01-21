@@ -88,16 +88,11 @@ pub(super) struct RenderInfo {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ImageInfo {
     id: usize,
+    view_rect: (u32, u32, u32, u32),
 
-    view_x: u32,
-    view_y: u32,
-    view_width: u32,
-    view_height: u32,
-
+    img_size: (u32, u32),
+    z: ImageZ,
     uv_transform: Transform,
-
-    img_width: u32,
-    img_height: u32,
 }
 
 /// Map from (x, y, glyph) -> (cell index, cache entry).
@@ -200,6 +195,34 @@ impl Drop for ImageHandle {
     }
 }
 
+/// Positioning of the image relative to the text in the cells.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ImageZ {
+    BelowText,
+    #[default]
+    AboveText,
+}
+
+/// Fit the image to the render area.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFit {
+    /// Fill the whole area. This will not respect the aspect ratio
+    /// of the original image.
+    #[default]
+    Fill,
+    /// Fit the image to the area. It will be scaled either horizontally
+    /// or vertically to make the image fit.
+    Fit,
+    /// Fit the image to the area. It will be scaled horizontally to
+    /// make the image fit. The image will be clipped or the background
+    /// will be visible.
+    Horizontal,
+    /// Fit the image to the area. It will be scaled vertically to
+    /// make the image fit. The image will be clipped or the background
+    /// will be visible.
+    FitVertical,
+}
+
 impl ImageBuffer {
     /// Get the active FontBox
     pub fn font_box(&self) -> FontBox {
@@ -214,14 +237,51 @@ impl ImageBuffer {
         self.image_size.lock().expect("lock").get(&id.id).cloned()
     }
 
-    /// Render an image
+    /// Convert the ratatui Rect to a screen-area.
+    ///
+    /// This will not check if the area is inside the window bounds.
+    pub fn rect_px(
+        &self,
+        area: ratatui_core::layout::Rect,
+    ) -> (u32, u32, u32, u32) {
+        let font_box = self.font_box();
+
+        (
+            area.x as u32 * font_box.width,
+            area.y as u32 * font_box.height,
+            area.width as u32 * font_box.width,
+            area.height as u32 * font_box.height,
+        )
+    }
+
+    /// Render an image.
+    ///
+    /// To get an ImageHandle add the image first with [add_image]. Add image
+    /// will create the texture for the image.
     pub fn render_image(
         &self,
         id: &ImageHandle,
-        area: ratatui_core::layout::Rect,
+        area: (u32, u32, u32, u32),
+        z: ImageZ,
+        fit: ImageFit,
     ) {
         let mut images = self.images.lock().expect("lock");
-        images.push((id.id, area, Transform::default()));
+        let tr = match fit {
+            ImageFit::Fill => Transform::default(),
+            ImageFit::Fit => {
+                let img = self.image_size(id).expect("img1");
+                self.scale_to_fit(img, (area.2, area.3))
+            }
+            ImageFit::Horizontal => {
+                let img = self.image_size(id).expect("img1");
+                self.scale_to_fit_horizontal(img, (area.2, area.3))
+            }
+            ImageFit::FitVertical => {
+                let img = self.image_size(id).expect("img1");
+                self.scale_to_fit_vertical(img, (area.2, area.3))
+            }
+        };
+        images.push((id.id, area, z, tr));
     }
 
     /// Render an image with a Transform.
@@ -233,25 +293,22 @@ impl ImageBuffer {
     pub fn render_image_tr(
         &self,
         id: &ImageHandle,
-        area: ratatui_core::layout::Rect,
-        uv_transform: raqote::Transform,
+        area: (u32, u32, u32, u32),
+        z: ImageZ,
+        uv_transform: Transform,
     ) {
         let mut images = self.images.lock().expect("lock");
-        images.push((id.id, area, uv_transform));
+        images.push((id.id, area, z, uv_transform));
     }
 
     /// Scale the image for the best fit in the given area.
-    pub fn scale_to_fit(
+    fn scale_to_fit(
         &self,
-        img_width: u32,
-        img_height: u32,
-        rect: ratatui_core::layout::Rect,
+        img: (u32, u32),
+        view: (u32, u32),
     ) -> Transform {
-        let font_box = self.font_box();
-
-        let (view_width, view_height) = font_box.px_size(rect.width, rect.height);
-        let (view_width, view_height) = (view_width as f32, view_height as f32);
-        let (img_width, img_height) = (img_width as f32, img_height as f32);
+        let (view_width, view_height) = (view.0 as f32, view.1 as f32);
+        let (img_width, img_height) = (img.0 as f32, img.1 as f32);
 
         if view_width * img_height / view_height > img_width {
             let w_scale = (view_width * img_height) / (view_height * img_width);
@@ -265,35 +322,28 @@ impl ImageBuffer {
     }
 
     /// Scale the image for the best fit in the given area.
-    pub fn scale_to_fill_horizontal(
+    fn scale_to_fit_horizontal(
         &self,
-        img_width: u32,
-        img_height: u32,
-        rect: ratatui_core::layout::Rect,
+        img: (u32, u32),
+        view: (u32, u32),
     ) -> Transform {
-        let font_box = self.font_box();
-
-        let (view_width, view_height) = font_box.px_size(rect.width, rect.height);
-        let (view_width, view_height) = (view_width as f32, view_height as f32);
-        let (img_width, img_height) = (img_width as f32, img_height as f32);
+        let (view_width, view_height) = (view.0 as f32, view.1 as f32);
+        let (img_width, img_height) = (img.0 as f32, img.1 as f32);
 
         let w_scale = 1.0f32;
         let h_scale = (view_height * img_width) / (view_width * img_height);
+
         Transform::scale(w_scale, h_scale)
     }
 
     /// Scale the image for the best fit in the given area.
-    pub fn scale_to_fill_vertical(
+    fn scale_to_fit_vertical(
         &self,
-        img_width: u32,
-        img_height: u32,
-        rect: ratatui_core::layout::Rect,
+        img: (u32, u32),
+        view: (u32, u32),
     ) -> Transform {
-        let font_box = self.font_box();
-
-        let (view_width, view_height) = font_box.px_size(rect.width, rect.height);
-        let (view_width, view_height) = (view_width as f32, view_height as f32);
-        let (img_width, img_height) = (img_width as f32, img_height as f32);
+        let (view_width, view_height) = (view.0 as f32, view.1 as f32);
+        let (img_width, img_height) = (img.0 as f32, img.1 as f32);
 
         let w_scale = (view_width * img_height) / (view_height * img_width);
         let h_scale = 1.0f32;
@@ -850,12 +900,27 @@ fn render(
 
         if !vertices.text_indices.is_empty() {
             text_render_pass.set_index_buffer(txt_indices.slice(..), IndexFormat::Uint32);
-
             text_render_pass.set_pipeline(&pipeline.text_bg_compositor.pipeline);
             text_render_pass.set_bind_group(0, &pipeline.text_bg_compositor.fs_uniforms, &[]);
             text_render_pass.set_vertex_buffer(0, bg_vertices.slice(..));
             text_render_pass.draw_indexed(0..(vertices.bg_vertices.len() as u32 / 4) * 6, 0, 0..1);
+        }
 
+        if !vertices.img_vertices.is_empty() {
+            render_img(
+                &base.device,
+                &mut text_render_pass,
+                pipeline,
+                ImageZ::BelowText,
+                images,
+                &img_indices,
+                &img_vertices,
+                &vertices.img_render,
+            );
+        }
+
+        if !vertices.text_indices.is_empty() {
+            text_render_pass.set_index_buffer(txt_indices.slice(..), IndexFormat::Uint32);
             text_render_pass.set_pipeline(&pipeline.text_fg_compositor.pipeline);
             text_render_pass.set_bind_group(0, &pipeline.text_fg_compositor.fs_uniforms, &[]);
             text_render_pass.set_bind_group(1, &pipeline.text_fg_compositor.atlas_bindings, &[]);
@@ -868,66 +933,16 @@ fn render(
         }
 
         if !vertices.img_vertices.is_empty() {
-            text_render_pass.set_index_buffer(img_indices.slice(..), IndexFormat::Uint32);
-
-            text_render_pass.set_pipeline(&pipeline.img_compositor.pipeline);
-            text_render_pass.set_bind_group(0, &pipeline.img_compositor.fs_uniforms, &[]);
-            text_render_pass.set_vertex_buffer(0, img_vertices.slice(..));
-            for (n, img_info) in vertices.img_render.iter().enumerate() {
-                let n = n as u32;
-
-                let img_size_buffer = base.device.create_buffer_init(&BufferInitDescriptor {
-                    label: Some("Image Size Uniforms Buffer"),
-                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                    contents: bytemuck::cast_slice(&[
-                        img_info.img_width as f32,
-                        img_info.img_height as f32,
-                    ]),
-                });
-                let view_size_buffer = base.device.create_buffer_init(&BufferInitDescriptor {
-                    label: Some("View Size Uniforms Buffer"),
-                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                    contents: bytemuck::cast_slice(&[
-                        img_info.view_width as f32,
-                        img_info.view_height as f32,
-                    ]),
-                });
-                let uv_transform_buffer = base.device.create_buffer_init(&BufferInitDescriptor {
-                    label: Some("Image UV-Transform Uniforms Buffer"),
-                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                    contents: bytemuck::cast_slice(&[[
-                        img_info.uv_transform.m11,
-                        img_info.uv_transform.m21,
-                        img_info.uv_transform.m31,
-                        0.0f32, // padding
-                        img_info.uv_transform.m12,
-                        img_info.uv_transform.m22,
-                        img_info.uv_transform.m32,
-                        0.0f32, // padding
-                    ]]),
-                });
-
-                let img_size_bindings = build_img_size_bindings(
-                    &pipeline.img_compositor,
-                    &base.device,
-                    &img_size_buffer,
-                    &view_size_buffer,
-                    &uv_transform_buffer,
-                );
-                text_render_pass.set_bind_group(1, &img_size_bindings, &[]);
-
-                let img_texture = images.img.get(&img_info.id).expect("image");
-                let img_bindings = build_img_bindings(
-                    &pipeline.img_compositor,
-                    &base.device,
-                    &pipeline.sampler,
-                    &img_texture.texture,
-                );
-
-                text_render_pass.set_bind_group(2, &img_bindings, &[]);
-
-                text_render_pass.draw_indexed(n * 6..(n + 1) * 6, 0, 0..1);
-            }
+            render_img(
+                &base.device,
+                &mut text_render_pass,
+                pipeline,
+                ImageZ::AboveText,
+                images,
+                &img_indices,
+                &img_vertices,
+                &vertices.img_render,
+            );
         }
     }
 
@@ -951,6 +966,83 @@ fn render(
     texture.present();
 }
 
+fn render_img(
+    device: &Device,
+    text_render_pass: &mut RenderPass,
+    pipeline: &WgpuPipeline,
+    z: ImageZ,
+    images: &WgpuImages,
+    img_indices: &Buffer,
+    img_vertices: &Buffer,
+    img_render: &[ImageInfo],
+) {
+    text_render_pass.set_index_buffer(img_indices.slice(..), IndexFormat::Uint32);
+
+    text_render_pass.set_pipeline(&pipeline.img_compositor.pipeline);
+    text_render_pass.set_bind_group(0, &pipeline.img_compositor.fs_uniforms, &[]);
+    text_render_pass.set_vertex_buffer(0, img_vertices.slice(..));
+    for (n, img_info) in img_render.iter().enumerate() {
+        let n = n as u32;
+
+        if img_info.z != z {
+            continue;
+        }
+
+        let img_size_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Image Size Uniforms Buffer"),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            contents: bytemuck::cast_slice(&[
+                img_info.img_size.0 as f32,
+                img_info.img_size.1 as f32,
+            ]),
+        });
+        let view_size_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("View Size Uniforms Buffer"),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            contents: bytemuck::cast_slice(&[
+                img_info.view_rect.2 as f32,
+                img_info.view_rect.3 as f32,
+            ]),
+        });
+        let uv_transform_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Image UV-Transform Uniforms Buffer"),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            contents: bytemuck::cast_slice(&[[
+                img_info.uv_transform.m11,
+                img_info.uv_transform.m21,
+                img_info.uv_transform.m31,
+                0.0f32, // padding
+                img_info.uv_transform.m12,
+                img_info.uv_transform.m22,
+                img_info.uv_transform.m32,
+                0.0f32, // padding
+            ]]),
+        });
+
+        let img_size_bindings = build_img_size_bindings(
+            &pipeline.img_compositor,
+            &device,
+            &img_size_buffer,
+            &view_size_buffer,
+            &uv_transform_buffer,
+        );
+        text_render_pass.set_bind_group(1, &img_size_bindings, &[]);
+
+        let img_texture = images.img.get(&img_info.id).expect("image");
+        let img_bindings = build_img_bindings(
+            &pipeline.img_compositor,
+            &device,
+            &pipeline.sampler,
+            &img_texture.texture,
+        );
+
+        text_render_pass.set_bind_group(2, &img_bindings, &[]);
+
+        text_render_pass.draw_indexed(n * 6..(n + 1) * 6, 0, 0..1);
+    }
+}
+
+// called by draw()
 fn draw_tui(
     bounds: ratatui_core::layout::Size,
     fonts: &Fonts,
@@ -979,43 +1071,98 @@ fn draw_tui(
         .dirty_cells
         .resize(bounds.height as usize * bounds.width as usize, true);
 
-    let font_box = fonts.font_box();
-    let mut new_images = Vec::new();
+    // image preparation
+    {
+        let font_box = fonts.font_box();
+        let mut images = Vec::new();
+        let mut image_buffer = tui_surface.image_buffer.images.lock().expect("lock");
+        for (img_id, view_rect, z, transform) in image_buffer.iter() {
+            let img = wgpu_images.img.get(img_id).expect("image");
+            let img_info = ImageInfo {
+                id: *img_id,
+                img_size: (img.width, img.height),
+                view_rect: *view_rect,
+                z: *z,
+                uv_transform: *transform,
+            };
 
-    let mut images = tui_surface.image_buffer.images.lock().expect("lock");
-    for (img_id, area, transform) in images.iter() {
-        new_images.push((*img_id, *area));
-        tui_surface
-            .images
-            .retain(|(test_img_id, test_area)| !(test_img_id == img_id && test_area == area));
+            images.push(img_info);
 
-        let img = wgpu_images.img.get(img_id).expect("image");
-        tui_surface.dirty_img.push(ImageInfo {
-            id: *img_id,
-            view_x: (area.x as u32) * font_box.width,
-            view_y: (area.y as u32) * font_box.height,
-            view_width: (area.width as u32) * font_box.width,
-            view_height: (area.height as u32) * font_box.height,
-            uv_transform: *transform,
-            img_width: img.width,
-            img_height: img.height,
-        });
-    }
-    // clear communication buffer
-    images.clear();
-
-    // render areas for old&new images
-    for (_, area) in tui_surface.images.iter().chain(new_images.iter()) {
-        for y in area.y..area.y + area.height {
-            for x in area.x..area.x + area.width {
-                tui_surface
-                    .dirty_cells
-                    .set((y * bounds.width + x) as usize, true);
+            // find dirty images
+            if let Some(pos) = tui_surface
+                .images
+                .iter()
+                .position(|test| test.id == *img_id && test.view_rect == *view_rect)
+            {
+                let test = tui_surface.images[pos];
+                if test.z != img_info.z || test.uv_transform != img_info.uv_transform {
+                    // existing image differs in render parameters.
+                    tui_surface.dirty_img.push(img_info);
+                } else {
+                    // any of the rows is marked as dirty
+                    let view_y =
+                        ((img_info.view_rect.1 / font_box.height) as u16).min(bounds.height);
+                    let mut view_height = (img_info.view_rect.3 / font_box.height) as u16;
+                    if img_info.view_rect.3 % font_box.width != 0 {
+                        view_height += 1;
+                    }
+                    if view_y + view_height > bounds.height {
+                        view_height = bounds.height - view_y;
+                    }
+                    for y in view_y..view_y + view_height {
+                        if tui_surface.dirty_rows[y as usize] {
+                            tui_surface.dirty_img.push(img_info);
+                        }
+                    }
+                }
+                tui_surface.images.remove(pos);
+            } else {
+                // new image
+                tui_surface.dirty_img.push(img_info);
             }
-            tui_surface.dirty_rows.set(y as usize, true);
         }
+
+        // clear communication buffer
+        image_buffer.clear();
+
+        // overlapping cells of removed or dirty images must be marked as dirty.
+        for img_info in tui_surface
+            .images
+            .iter()
+            .chain(tui_surface.dirty_img.iter())
+        {
+            let mut view_width = (img_info.view_rect.2 / font_box.width) as u16;
+            if img_info.view_rect.2 % font_box.width != 0 {
+                view_width += 1;
+            }
+            let mut view_height = (img_info.view_rect.3 / font_box.height) as u16;
+            if img_info.view_rect.3 % font_box.width != 0 {
+                view_height += 1;
+            }
+            let area = ratatui_core::layout::Rect::new(
+                (img_info.view_rect.0 / font_box.width) as u16,
+                (img_info.view_rect.1 / font_box.height) as u16,
+                view_width,
+                view_height,
+            );
+            let area = area.intersection(ratatui_core::layout::Rect::new(
+                0,
+                0,
+                bounds.width,
+                bounds.height,
+            ));
+
+            for y in area.y..area.y + area.height {
+                for x in area.x..area.x + area.width {
+                    tui_surface
+                        .dirty_cells
+                        .set((y * bounds.width + x) as usize, true);
+                }
+                tui_surface.dirty_rows.set(y as usize, true);
+            }
+        }
+        tui_surface.images = images;
     }
-    tui_surface.images = new_images;
 
     rendered.resize_with(
         bounds.height as usize * bounds.width as usize,
@@ -1301,11 +1448,10 @@ fn append_rendered_image(
     index_offset: &mut u32,
     vertices: &mut WgpuVertices,
 ) {
-    let id = to_render.id;
-    let x = to_render.view_x as f32;
-    let y = to_render.view_y as f32;
-    let width = to_render.view_width as f32;
-    let height = to_render.view_height as f32;
+    let x = to_render.view_rect.0 as f32;
+    let y = to_render.view_rect.1 as f32;
+    let width = to_render.view_rect.2 as f32;
+    let height = to_render.view_rect.3 as f32;
     let uvx = 0.0f32;
     let uvy = 0.0f32;
 
